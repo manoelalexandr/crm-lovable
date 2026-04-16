@@ -1,18 +1,42 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Eye, EyeOff } from "lucide-react";
+import { useNavigate, useLocation } from "react-router-dom";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { supabase } from "@/lib/supabase";
+import { toast } from "sonner";
 
 const Login = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    navigate("/dashboard");
+    setIsLoading(true);
+
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        toast.error("Erro ao fazer login: " + error.message);
+        return;
+      }
+
+      // Login bem sucedido. Redireciona para onde o usuário queria ir ou /dashboard.
+      const from = location.state?.from?.pathname || "/dashboard";
+      navigate(from, { replace: true });
+    } catch (error: any) {
+      toast.error("Ocorreu um erro inesperado.");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -30,6 +54,7 @@ const Login = () => {
               onChange={e => setEmail(e.target.value)}
               className="h-11"
               required
+              disabled={isLoading}
             />
           </div>
           <div className="relative">
@@ -40,17 +65,20 @@ const Login = () => {
               onChange={e => setPassword(e.target.value)}
               className="h-11 pr-10"
               required
+              disabled={isLoading}
             />
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              disabled={isLoading}
             >
               {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
           </div>
-          <Button type="submit" className="w-full h-11 text-base font-semibold">
-            Entrar
+          <Button type="submit" className="w-full h-11 text-base font-semibold" disabled={isLoading}>
+            {isLoading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : null}
+            {isLoading ? "Entrando..." : "Entrar"}
           </Button>
           <p className="text-center text-sm text-muted-foreground">
             Não tem uma conta? <a href="#" className="text-primary hover:underline font-medium">Cadastre-se!</a>
