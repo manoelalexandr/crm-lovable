@@ -61,26 +61,38 @@ export async function deleteChannel(id: string) {
   return true;
 }
 
-// Lógica simulada da Evolution API para buscar QR Code. 
-// Em produção, isso seria uma chamada fetch() para a API real via Edge Function ou backend.
+// Lógica Real da Evolution API V2 para buscar QR Code.
 export const generateEvolutionQR = async (apiUrl: string, apiKey: string, instanceName: string) => {
   try {
-    // Isso é um Mock. No mundo real você faria:
-    // const res = await fetch(`${apiUrl}/instance/connect/${instanceName}`, { 
-    //   headers: { "apikey": apiKey } 
-    // });
-    // return await res.json();
+    const formattedUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
+    const connectUrl = `${formattedUrl}/instance/connect/${instanceName}`;
     
-    // Simulate delay
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    const response = await fetch(connectUrl, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': apiKey
+      }
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Erro na Evolution API (${response.status}): ${errorText}`);
+    }
+
+    const data = await response.json();
     
-    // Payload falso copiando o retorno da Evolution API
-    return {
-      instance: { instanceName },
-      base64: "https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=MockedEvolutionApiQRCode" // Placeholder de QR
-    };
+    // Na V2 o retorno costuma ter { code, base64 }
+    if (data.base64) {
+      return {
+        instance: instanceName,
+        base64: data.base64
+      };
+    }
+
+    throw new Error("QR Code não retornado pela API. Verifique se a instância já está conectada.");
   } catch (error) {
-    console.error("Erro ao gerar QR Code", error);
+    console.error("Erro ao gerar QR Code:", error);
     throw error;
   }
 };
