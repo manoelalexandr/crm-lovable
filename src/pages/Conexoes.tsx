@@ -37,6 +37,8 @@ const Conexoes = () => {
   const [activeQrCode, setActiveQrCode] = useState<string | null>(null);
   const [selectedChannel, setSelectedChannel] = useState<ChannelData | null>(null);
   const [isGeneratingQr, setIsGeneratingQr] = useState(false);
+  const [isTestingConn, setIsTestingConn] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
 
   const { data: channels = [], isLoading } = useQuery({
     queryKey: ["channels", companyId],
@@ -52,7 +54,7 @@ const Conexoes = () => {
         type,
         status: 'disconnected' as const,
         is_active: true,
-        evolution_instance_name: `${companyId}_${name.replace(/\\s+/g, '_').toLowerCase()}`,
+        evolution_instance_name: `${companyId}_${name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, '_').toLowerCase()}`,
         evolution_api_url: evoUrl,
         evolution_api_key: evoKey,
       };
@@ -62,17 +64,71 @@ const Conexoes = () => {
       queryClient.invalidateQueries({ queryKey: ["channels", companyId] });
       setIsModalOpen(false);
       setName("");
-      toast.success("Conexão salva com sucesso!");
+      setIsEditMode(false);
+      setSelectedChannel(null);
+      toast.success(isEditMode ? "Conexão atualizada!" : "Conexão salva!");
       
-      if (newChannel.type === 'whatsapp') {
+      if (!isEditMode && newChannel.type === 'whatsapp') {
         openQrCode(newChannel);
-      } else {
-        toast.info("A integração com Instagram requer login via Meta. Direcionando...");
-        // Futuro: Redirecionar para o/Auth/FacebookLogin
       }
     },
     onError: () => toast.error("Erro ao salvar conexão")
   });
+
+  const updateMutation = useMutation({
+    mutationFn: (id: string) => {
+      const payload = {
+        name,
+        type,
+        evolution_api_url: evoUrl,
+        evolution_api_key: evoKey,
+      };
+      return updateChannel(id, payload);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["channels", companyId] });
+      setIsModalOpen(false);
+      setIsEditMode(false);
+      setSelectedChannel(null);
+      toast.success("Conexão atualizada!");
+    },
+    onError: () => toast.error("Erro ao atualizar conexão")
+  });
+
+  const testConnection = async () => {
+    setIsTestingConn(true);
+    try {
+      const formattedUrl = evoUrl.endsWith('/') ? evoUrl.slice(0, -1) : evoUrl;
+      const cleanKey = evoKey.trim();
+      const res = await fetch(`${formattedUrl}/instance/fetchInstances`, {
+        method: 'GET',
+        headers: { 'apikey': cleanKey }
+      });
+      
+      if (res.ok) {
+        toast.success("Conexão bem-sucedida! A URL e a Chave estão corretas.");
+      } else {
+        const err = await res.text();
+        toast.error(`Falha na conexão: ${res.status} (Verifique a API Key)`);
+        console.error("Erro no teste:", err);
+      }
+    } catch (e) {
+      toast.error("Erro ao tentar alcançar o servidor. Verifique a URL.");
+      console.error(e);
+    } finally {
+      setIsTestingConn(false);
+    }
+  };
+
+  const handleEdit = (channel: ChannelData) => {
+    setSelectedChannel(channel);
+    setName(channel.name);
+    setType(channel.type as any);
+    setEvoUrl(channel.evolution_api_url || "");
+    setEvoKey(channel.evolution_api_key || "");
+    setIsEditMode(true);
+    setIsModalOpen(true);
+  };
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteChannel(id),
@@ -214,6 +270,9 @@ const Conexoes = () => {
                     <QrCode className="h-4 w-4 mr-2" /> Gerar QR Code
                   </Button>
                 )}
+                <Button variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-primary" onClick={() => handleEdit(channel)}>
+                  <Edit2 className="h-4 w-4" />
+                </Button>
                 <Button variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-destructive" onClick={() => handleDelete(channel.id)}>
                   <Trash2 className="h-4 w-4" />
                 </Button>
@@ -223,12 +282,17 @@ const Conexoes = () => {
         )}
       </div>
 
-      {/* Modal Add Connection */}
-      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+      <Dialog open={isModalOpen} onOpenChange={(open) => {
+        setIsModalOpen(open);
+        if (!open) {
+          setIsEditMode(false);
+          setName("");
+        }
+      }}>
         <DialogContent className="sm:max-w-[450px]">
           <DialogHeader>
-            <DialogTitle>Nova Conexão</DialogTitle>
-            <DialogDescription>Escolha o canal e insira as informações do dispositivo.</DialogDescription>
+            <DialogTitle>{isEditMode ? "Editar Conexão" : "Nova Conexão"}</DialogTitle>
+            <DialogDescription>Configure os dados do servidor Evolution API.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="flex flex-col gap-2">
@@ -262,10 +326,15 @@ const Conexoes = () => {
               </>
             )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button variant="ghost" size="sm" onClick={testConnection} disabled={isTestingConn || !evoUrl || !evoKey} className="text-xs">
+              {isTestingConn ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Wifi className="h-3 w-3 mr-1" />}
+              Testar Conexão
+            </Button>
+            <div className="flex-1" />
             <Button variant="outline" size="sm" onClick={() => setIsModalOpen(false)}>Cancelar</Button>
-            <Button size="sm" onClick={() => saveMutation.mutate()} disabled={!name.trim() || saveMutation.isPending}>
-              {saveMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Salvar e Conectar"}
+            <Button size="sm" onClick={() => isEditMode ? updateMutation.mutate(selectedChannel!.id) : saveMutation.mutate()} disabled={!name.trim() || saveMutation.isPending || updateMutation.isPending}>
+              {saveMutation.isPending || updateMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : (isEditMode ? "Salvar Alterações" : "Salvar e Conectar")}
             </Button>
           </DialogFooter>
         </DialogContent>

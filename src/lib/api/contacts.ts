@@ -12,7 +12,10 @@ export interface ContactData {
   extra_data?: Record<string, any>;
   created_at: string;
   updated_at: string;
-  contact_tags?: any[]; // Allow for joined data
+}
+
+export interface ContactWithTags extends ContactData {
+  contact_tags?: { tags: any }[];
 }
 
 export async function getContacts(companyId: string) {
@@ -28,7 +31,7 @@ export async function getContacts(companyId: string) {
     .order('created_at', { ascending: false });
 
   if (error) throw error;
-  return data as ContactData[];
+  return data as ContactWithTags[];
 }
 
 export async function createContact(contact: Omit<ContactData, 'id' | 'created_at' | 'updated_at'>) {

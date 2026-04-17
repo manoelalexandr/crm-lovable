@@ -65,13 +65,42 @@ export async function deleteChannel(id: string) {
 export const generateEvolutionQR = async (apiUrl: string, apiKey: string, instanceName: string) => {
   try {
     const formattedUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
+    const cleanApiKey = apiKey.trim();
+    
+    // 1. Tenta criar a instância primeiro (caso não exista)
+    try {
+      console.log(`[Evolution] Tentando criar instância: ${instanceName} em ${formattedUrl}`);
+      const createRes = await fetch(`${formattedUrl}/instance/create`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': cleanApiKey
+        },
+        body: JSON.stringify({
+          instanceName: instanceName,
+          qrcode: true
+        })
+      });
+      
+      if (!createRes.ok) {
+        const err = await createRes.text();
+        console.warn(`[Evolution] Aviso na criação (status ${createRes.status}):`, err);
+      } else {
+        console.log(`[Evolution] Instância ${instanceName} criada ou já existente.`);
+      }
+    } catch (e) {
+      console.error("[Evolution] Erro fatal na tentativa de criação:", e);
+    }
+
+    // 2. Busca o QR Code / Conexão
+    console.log(`[Evolution] Solicitando QR Code para: ${instanceName}`);
     const connectUrl = `${formattedUrl}/instance/connect/${instanceName}`;
     
     const response = await fetch(connectUrl, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
-        'apikey': apiKey
+        'apikey': cleanApiKey
       }
     });
 
@@ -96,3 +125,46 @@ export const generateEvolutionQR = async (apiUrl: string, apiKey: string, instan
     throw error;
   }
 };
+
+/**
+ * Envia uma mensagem de texto real via Evolution API
+ */
+export async function sendEvolutionMessage(
+  apiUrl: string, 
+  apiKey: string, 
+  instanceName: string, 
+  remoteJid: string, 
+  text: string
+) {
+  try {
+    const formattedUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
+    const sendUrl = `${formattedUrl}/message/sendText/${instanceName}`;
+    
+    // Remote JID costuma ser o número com @s.whatsapp.net
+    // Se vier apenas o número, formatamos
+    const number = remoteJid.includes('@') ? remoteJid : `${remoteJid}@s.whatsapp.net`;
+
+    const response = await fetch(sendUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': apiKey
+      },
+      body: JSON.stringify({
+        number: number,
+        text: text,
+        linkPreview: true
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Erro ao enviar via Evolution API (${response.status}): ${errorText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Falha no envio Evolution API:", error);
+    throw error;
+  }
+}
