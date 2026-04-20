@@ -64,32 +64,72 @@ export async function deleteChannel(id: string) {
 // Lógica Real da Evolution API V2 para buscar QR Code.
 export const generateEvolutionQR = async (apiUrl: string, apiKey: string, instanceName: string) => {
   try {
-    const formattedUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
+    let formattedUrl = apiUrl.trim();
+    if (!formattedUrl.startsWith('http')) {
+      formattedUrl = `https://${formattedUrl}`;
+    }
+    if (formattedUrl.endsWith('/')) {
+      formattedUrl = formattedUrl.slice(0, -1);
+    }
     const cleanApiKey = apiKey.trim();
     
-    // 1. Tenta criar a instância primeiro (caso não exista)
-    try {
-      console.log(`[Evolution] Tentando criar instância: ${instanceName} em ${formattedUrl}`);
-      const createRes = await fetch(`${formattedUrl}/instance/create`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': cleanApiKey
-        },
-        body: JSON.stringify({
-          instanceName: instanceName,
-          qrcode: true
-        })
-      });
+    // 1. Tenta criar a instância primeiro
+    console.log(`[Evolution] Tentando criar instância: ${instanceName} em ${formattedUrl}`);
+    const createRes = await fetch(`${formattedUrl}/instance/create`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': cleanApiKey
+      },
+      body: JSON.stringify({
+        instanceName: instanceName,
+        token: instanceName, // A V2 costuma usar o nome da instância como token por padrão
+        qrcode: true,
+        integration: "WHATSAPP-BAILEYS" // Parâmetro exigido na V2
+      })
+    });
+    
+    if (!createRes.ok) {
+      const errText = await createRes.text();
+      const isAlreadyExistsError = errText.includes("already exists") || errText.includes("already in use");
       
-      if (!createRes.ok) {
-        const err = await createRes.text();
-        console.warn(`[Evolution] Aviso na criação (status ${createRes.status}):`, err);
-      } else {
-        console.log(`[Evolution] Instância ${instanceName} criada ou já existente.`);
+      if (!isAlreadyExistsError) {
+        throw new Error(`Falha ao CRIAR instância (${createRes.status}): ${errText}`);
       }
-    } catch (e) {
-      console.error("[Evolution] Erro fatal na tentativa de criação:", e);
+      console.log(`[Evolution] Instância ${instanceName} já existia.`);
+    } else {
+      console.log(`[Evolution] Instância ${instanceName} criada com sucesso.`);
+    }
+
+    // 1.5. Configura o Webhook para garantir o recebimento de mensagens
+    try {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      if (supabaseUrl) {
+        const webhookUrl = `${supabaseUrl}/functions/v1/evolution-webhook`;
+        console.log(`[Evolution] Configurando webhook para: ${webhookUrl}`);
+        
+        await fetch(`${formattedUrl}/webhook/set/${instanceName}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': cleanApiKey
+          },
+          body: JSON.stringify({
+            webhook: {
+              url: webhookUrl,
+              byEvents: false,
+              base64: false,
+              events: [
+                "MESSAGES_UPSERT",
+                "CONNECTION_UPDATE",
+                "SEND_MESSAGE"
+              ]
+            }
+          })
+        });
+      }
+    } catch (webhookErr) {
+      console.error("[Evolution] Falha ao configurar webhook, mas prosseguindo...", webhookErr);
     }
 
     // 2. Busca o QR Code / Conexão
@@ -106,7 +146,7 @@ export const generateEvolutionQR = async (apiUrl: string, apiKey: string, instan
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Erro na Evolution API (${response.status}): ${errorText}`);
+      throw new Error(`Erro ao conectar na Evolution API (${response.status}): ${errorText}`);
     }
 
     const data = await response.json();
@@ -127,6 +167,41 @@ export const generateEvolutionQR = async (apiUrl: string, apiKey: string, instan
 };
 
 /**
+ * Verifica o status da conexão diretamente na Evolution API
+ */
+export async function checkConnectionState(apiUrl: string, apiKey: string, instanceName: string) {
+  try {
+    let formattedUrl = apiUrl.trim();
+    if (!formattedUrl.startsWith('http')) {
+      formattedUrl = `https://${formattedUrl}`;
+    }
+    if (formattedUrl.endsWith('/')) {
+      formattedUrl = formattedUrl.slice(0, -1);
+    }
+    const connectUrl = `${formattedUrl}/instance/connectionState/${instanceName}`;
+    
+    const response = await fetch(connectUrl, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': apiKey.trim()
+      }
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    // A V2 costuma retornar { instance: { state: "open" } }
+    return data?.instance?.state || data?.state;
+  } catch (error) {
+    console.error("Erro ao verificar status:", error);
+    return null;
+  }
+}
+
+/**
  * Envia uma mensagem de texto real via Evolution API
  */
 export async function sendEvolutionMessage(
@@ -137,7 +212,13 @@ export async function sendEvolutionMessage(
   text: string
 ) {
   try {
-    const formattedUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
+    let formattedUrl = apiUrl.trim();
+    if (!formattedUrl.startsWith('http')) {
+      formattedUrl = `https://${formattedUrl}`;
+    }
+    if (formattedUrl.endsWith('/')) {
+      formattedUrl = formattedUrl.slice(0, -1);
+    }
     const sendUrl = `${formattedUrl}/message/sendText/${instanceName}`;
     
     // Remote JID costuma ser o número com @s.whatsapp.net
@@ -165,6 +246,55 @@ export async function sendEvolutionMessage(
     return await response.json();
   } catch (error) {
     console.error("Falha no envio Evolution API:", error);
+    throw error;
+  }
+}
+
+/**
+ * Envia mídia (imagem, áudio, etc) via Evolution API
+ */
+export async function sendEvolutionMedia(
+  apiUrl: string, 
+  apiKey: string, 
+  instanceName: string, 
+  remoteJid: string, 
+  mediaUrl: string,
+  mediaType: 'image' | 'audio' | 'video' | 'document',
+  caption?: string
+) {
+  try {
+    let formattedUrl = apiUrl.trim();
+    if (!formattedUrl.startsWith('http')) {
+      formattedUrl = `https://${formattedUrl}`;
+    }
+    if (formattedUrl.endsWith('/')) {
+      formattedUrl = formattedUrl.slice(0, -1);
+    }
+    const sendUrl = `${formattedUrl}/message/sendMedia/${instanceName}`;
+    const number = remoteJid.includes('@') ? remoteJid : `${remoteJid}@s.whatsapp.net`;
+
+    const response = await fetch(sendUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': apiKey
+      },
+      body: JSON.stringify({
+        number: number,
+        media: mediaUrl,
+        mediatype: mediaType,
+        caption: caption || ''
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Erro ao enviar mídia via Evolution API (${response.status}): ${errorText}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Falha no envio de mídia Evolution API:", error);
     throw error;
   }
 }

@@ -1,11 +1,12 @@
 import { supabase } from '../supabase';
-import { sendEvolutionMessage } from './channels';
+import { sendEvolutionMessage, sendEvolutionMedia } from './channels';
 
 export interface Contact {
   id: string;
   name: string | null;
   phone: string | null;
   avatar_url: string | null;
+  notes: string | null;
 }
 
 export interface Ticket {
@@ -18,6 +19,8 @@ export interface Ticket {
   last_message_at: string | null;
   source: string | null;
   contacts: Contact | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Message {
@@ -27,6 +30,7 @@ export interface Message {
   sender_id: string | null;
   content: string;
   type: string;
+  media_url?: string | null;
   created_at: string;
   status: string | null;
 }
@@ -150,6 +154,77 @@ export async function sendMessage(ticketId: string, content: string, companyId: 
     .from('tickets')
     .update({ 
       last_message: content, 
+      last_message_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', ticketId);
+
+  return msgData as Message;
+}
+
+export async function sendMediaMessage(
+  ticketId: string, 
+  mediaUrl: string, 
+  mediaType: 'image' | 'audio' | 'video' | 'document',
+  companyId: string, 
+  agentId: string,
+  caption?: string
+): Promise<Message> {
+  const { data: ticket, error: ticketError } = await supabase
+    .from('tickets')
+    .select(`
+      *,
+      contacts!inner (phone),
+      channels!inner (type, evolution_instance_name, evolution_api_url, evolution_api_key)
+    `)
+    .eq('id', ticketId)
+    .single();
+
+  if (ticketError) throw ticketError;
+
+  const contactPhone = (ticket.contacts as any)?.phone;
+  const channel = (ticket.channels as any);
+
+  const { data: msgData, error: msgError } = await supabase
+    .from('messages')
+    .insert([
+      {
+        ticket_id: ticketId,
+        company_id: companyId,
+        sender_type: 'agent',
+        sender_id: agentId,
+        content: caption || `[Arquivo de ${mediaType}]`,
+        type: mediaType,
+        media_url: mediaUrl,
+        status: 'sent'
+      }
+    ])
+    .select()
+    .single();
+
+  if (msgError) throw msgError;
+
+  if (channel?.type === 'whatsapp' && channel.evolution_instance_name && contactPhone) {
+    try {
+      await sendEvolutionMedia(
+        channel.evolution_api_url,
+        channel.evolution_api_key,
+        channel.evolution_instance_name,
+        contactPhone,
+        mediaUrl,
+        mediaType,
+        caption
+      );
+    } catch (apiError) {
+      console.error('Erro no envio de mídia via Evolution API:', apiError);
+      await supabase.from('messages').update({ status: 'error' }).eq('id', msgData.id);
+    }
+  }
+
+  await supabase
+    .from('tickets')
+    .update({ 
+      last_message: caption || `[Arquivo de ${mediaType}]`, 
       last_message_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     })

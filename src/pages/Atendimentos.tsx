@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Eye, Paperclip, Send, MoreVertical, ArrowRightLeft, Clock, MessageSquare, Search, StickyNote, Smartphone, Instagram } from "lucide-react";
+import { useState, useRef } from "react";
+import { Eye, Paperclip, Send, MoreVertical, ArrowRightLeft, Clock, MessageSquare, Search, StickyNote, Smartphone, Instagram, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { useEffect } from "react";
 
-import { getTickets, getTicketMessages, sendMessage, Ticket, Message } from "@/lib/api/tickets";
+import { getTickets, getTicketMessages, sendMessage, sendMediaMessage, Ticket, Message } from "@/lib/api/tickets";
 import { getContactTags, TagData } from "@/lib/api/tags";
 import { useAuth } from "@/contexts/AuthContext";
 import { format, isToday, isYesterday } from "date-fns";
@@ -36,15 +36,16 @@ const Atendimentos = () => {
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [messageInput, setMessageInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const companyId = company?.id;
 
   // Busca tickets da aba atual
   const { data: currentList = [], isLoading: isLoadingTickets } = useQuery({
     queryKey: ["tickets", companyId, activeTab],
-    queryFn: () => getTickets(companyId!, activeTab as any),
+    queryFn: () => getTickets(companyId!, activeTab as "aguardando" | "atendendo" | "resolvido"),
     enabled: !!companyId && activeTab !== "grupos",
-    refetchInterval: 10000, // Temporário até plugar ws
   });
 
   // Busca mensagens do ticket selecionado
@@ -52,7 +53,6 @@ const Atendimentos = () => {
     queryKey: ["messages", selectedTicket?.id],
     queryFn: () => getTicketMessages(selectedTicket!.id),
     enabled: !!selectedTicket?.id,
-    refetchInterval: 5000,
   });
 
   // Realtime subscription
@@ -60,21 +60,44 @@ const Atendimentos = () => {
     if (!companyId) return;
 
     const channel = supabase
-      .channel('messages_changes')
+      .channel('crm_realtime')
       .on(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event: '*',
           schema: 'public',
           table: 'messages',
           filter: `company_id=eq.${companyId}`,
         },
         (payload) => {
-          // Quando uma nova mensagem chega, atualizamos a lista de tickets (para contadores/lastMessage) 
-          // e as mensagens do ticket caso esteja aberto.
+          console.log("Realtime Message Change:", payload);
+          // Invalida tickets para atualizar contadores e última mensagem
           queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
-          if (payload.new.ticket_id === selectedTicket?.id) {
+          
+          // Se for uma nova mensagem para o ticket aberto, atualiza mensagens
+          const newMessage = payload.new as { ticket_id: string };
+          if (newMessage && newMessage.ticket_id === selectedTicket?.id) {
              queryClient.invalidateQueries({ queryKey: ["messages", selectedTicket.id] });
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'tickets',
+          filter: `company_id=eq.${companyId}`,
+        },
+        (payload) => {
+          console.log("Realtime Ticket Update:", payload);
+          // Invalida lista de tickets para refletir mudanças de status ou atribuição
+          queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
+          
+          // Se o ticket selecionado foi o que mudou, atualiza seus dados sem perder os campos joinados (contacts)
+          const updatedTicket = payload.new as Ticket;
+          if (updatedTicket && updatedTicket.id === selectedTicket?.id) {
+            setSelectedTicket(prev => prev ? { ...prev, ...updatedTicket, contacts: prev.contacts } : null);
           }
         }
       )
@@ -98,6 +121,50 @@ const Atendimentos = () => {
       console.error(error);
     }
   });
+
+  const sendMediaMutation = useMutation({
+    mutationFn: ({ url, type }: { url: string, type: any }) => 
+      sendMediaMessage(selectedTicket!.id, url, type, companyId!, user!.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", selectedTicket?.id] });
+      queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
+    },
+    onError: () => toast.error("Erro ao enviar arquivo")
+  });
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !selectedTicket || !companyId) return;
+
+    setIsUploading(true);
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}.${fileExt}`;
+      const filePath = `${companyId}/${fileName}`;
+
+      const { data, error } = await supabase.storage
+        .from('chat_media')
+        .upload(filePath, file);
+
+      if (error) throw error;
+
+      const { data: { publicUrl } } = supabase.storage.from('chat_media').getPublicUrl(filePath);
+      
+      let mediaType: 'image' | 'audio' | 'video' | 'document' = 'document';
+      if (file.type.startsWith('image/')) mediaType = 'image';
+      else if (file.type.startsWith('audio/')) mediaType = 'audio';
+      else if (file.type.startsWith('video/')) mediaType = 'video';
+
+      sendMediaMutation.mutate({ url: publicUrl, type: mediaType });
+      toast.success("Arquivo enviado!");
+    } catch (error) {
+      console.error("Upload error:", error);
+      toast.error("Erro ao enviar arquivo");
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
 
   const tabs = [
     { key: "atendendo" as const, label: "Atendendo", count: activeTab === 'atendendo' ? currentList.length : 0, color: "bg-primary" },
@@ -236,14 +303,14 @@ const Atendimentos = () => {
                 ) : messages.length === 0 ? (
                   <div className="p-4 text-center text-sm text-muted-foreground">Nenhuma mensagem ainda.</div>
                 ) : (
-                  messages.reduce((groups: any[], msg) => {
+                  messages.reduce((groups: { date: string, messages: Message[] }[], msg) => {
                     const date = format(new Date(msg.created_at), 'yyyy-MM-dd');
                     if (!groups.length || groups[groups.length - 1].date !== date) {
                       groups.push({ date, messages: [] });
                     }
                     groups[groups.length - 1].messages.push(msg);
                     return groups;
-                  }, []).map((group: any) => (
+                  }, [] as { date: string, messages: Message[] }[]).map((group) => (
                     <div key={group.date} className="space-y-4">
                       <div className="flex justify-center">
                         <span className="text-[10px] uppercase font-bold text-muted-foreground bg-background px-2 py-0.5 rounded-full border border-border">
@@ -260,6 +327,25 @@ const Atendimentos = () => {
                               ${isAgent
                                 ? "bg-primary text-primary-foreground rounded-tr-none"
                                 : "bg-card border border-border text-foreground rounded-tl-none"}`}>
+                              
+                              {msg.type === 'image' && msg.media_url && (
+                                <div className="mb-2 rounded overflow-hidden cursor-pointer hover:opacity-90 transition-opacity" onClick={() => window.open(msg.media_url!, '_blank')}>
+                                  <img src={msg.media_url} alt="Imagem" className="max-w-full h-auto rounded" />
+                                </div>
+                              )}
+
+                              {msg.type === 'audio' && msg.media_url && (
+                                <div className="mb-2 min-w-[200px]">
+                                  <audio src={msg.media_url} controls className="h-8 w-full" />
+                                </div>
+                              )}
+
+                              {msg.type === 'video' && msg.media_url && (
+                                <div className="mb-2 rounded overflow-hidden">
+                                  <video src={msg.media_url} controls className="max-w-full h-auto rounded" />
+                                </div>
+                              )}
+
                               <p className="whitespace-pre-wrap break-words">{msg.content}</p>
                               <div className={`text-[10px] mt-1 flex items-center justify-end gap-1 ${isAgent ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
                                 {format(new Date(msg.created_at), 'HH:mm')}
@@ -279,40 +365,54 @@ const Atendimentos = () => {
               </div>
 
               {/* Chat Input */}
-              <div className="border-t border-border p-3 flex items-center gap-2 bg-card">
-                <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
-                  <Paperclip className="h-4 w-4" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
-                  <MessageSquare className="h-4 w-4" />
-                </Button>
-                <Input
-                  placeholder="Digite uma mensagem..."
-                  value={messageInput}
-                  onChange={e => setMessageInput(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
+              <div className="border-t border-border p-3 bg-card">
+                <div className="flex items-center gap-2">
+                  <input 
+                    type="file" 
+                    className="hidden" 
+                    ref={fileInputRef} 
+                    onChange={handleFileUpload}
+                  />
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-8 w-8 shrink-0"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isUploading || !selectedTicket}
+                  >
+                    {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
+                    <MessageSquare className="h-4 w-4" />
+                  </Button>
+                  <Input
+                    placeholder="Digite uma mensagem..."
+                    value={messageInput}
+                    onChange={e => setMessageInput(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        if (messageInput.trim()) {
+                          sendMessageMutation.mutate(messageInput);
+                        }
+                      }
+                    }}
+                    className="h-9 text-sm"
+                    disabled={sendMessageMutation.isPending || isUploading}
+                  />
+                  <Button 
+                    size="icon" 
+                    className="h-8 w-8 shrink-0" 
+                    onClick={() => {
                       if (messageInput.trim()) {
                         sendMessageMutation.mutate(messageInput);
                       }
-                    }
-                  }}
-                  className="h-9 text-sm"
-                  disabled={sendMessageMutation.isPending}
-                />
-                <Button 
-                  size="icon" 
-                  className="h-8 w-8 shrink-0" 
-                  onClick={() => {
-                    if (messageInput.trim()) {
-                      sendMessageMutation.mutate(messageInput);
-                    }
-                  }}
-                  disabled={sendMessageMutation.isPending || !messageInput.trim()}
-                >
-                  {sendMessageMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                </Button>
+                    }}
+                    disabled={sendMessageMutation.isPending || !messageInput.trim() || isUploading}
+                  >
+                    {sendMessageMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  </Button>
+                </div>
               </div>
             </div>
 

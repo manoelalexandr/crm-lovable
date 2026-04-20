@@ -3,7 +3,7 @@ import { Plus, Wifi, WifiOff, Smartphone, Instagram, Loader2, QrCode, Trash2, Ed
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getChannels, createChannel, updateChannel, deleteChannel, generateEvolutionQR, ChannelData } from "@/lib/api/channels";
+import { getChannels, createChannel, updateChannel, deleteChannel, generateEvolutionQR, checkConnectionState, ChannelData } from "@/lib/api/channels";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { format } from "date-fns";
@@ -19,6 +19,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { useEffect } from "react";
+import { supabase } from "@/lib/supabase";
 
 const Conexoes = () => {
   const { company } = useAuth();
@@ -54,7 +56,7 @@ const Conexoes = () => {
         type,
         status: 'disconnected' as const,
         is_active: true,
-        evolution_instance_name: `${companyId}_${name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, '_').toLowerCase()}`,
+        evolution_instance_name: `${name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9]/g, '-').toLowerCase().slice(0, 10)}-${companyId?.slice(0, 8)}`,
         evolution_api_url: evoUrl,
         evolution_api_key: evoKey,
       };
@@ -123,7 +125,7 @@ const Conexoes = () => {
   const handleEdit = (channel: ChannelData) => {
     setSelectedChannel(channel);
     setName(channel.name);
-    setType(channel.type as any);
+    setType(channel.type as 'whatsapp' | 'instagram');
     setEvoUrl(channel.evolution_api_url || "");
     setEvoKey(channel.evolution_api_key || "");
     setIsEditMode(true);
@@ -156,18 +158,101 @@ const Conexoes = () => {
       if (channel.evolution_api_url && channel.evolution_instance_name) {
         const res = await generateEvolutionQR(channel.evolution_api_url, channel.evolution_api_key || '', channel.evolution_instance_name);
         setActiveQrCode(res.base64);
-        // Em um app real, faríamos um polling do webhook para saber quando ele de fato leu o QR code
-        // Aqui simulamos a conexão após gerar o QR Code se fosse num fluxo real
       } else {
         toast.error("Configurações da Evolution API ausentes neste canal.");
         setIsQrModalOpen(false);
       }
-    } catch (error) {
+    } catch (error: any) {
+      // Se falhou ao gerar o QR, pode ser que já esteja conectado. Vamos verificar o status.
+      if (channel.evolution_api_url && channel.evolution_instance_name) {
+        try {
+          const state = await checkConnectionState(channel.evolution_api_url, channel.evolution_api_key || '', channel.evolution_instance_name);
+          if (state === 'open') {
+            await updateChannel(channel.id, { status: 'connected' });
+            queryClient.invalidateQueries({ queryKey: ["channels", companyId] });
+            toast.success(`${channel.name} já estava conectado!`);
+          } else {
+            toast.error(error?.message || "Erro ao gerar QR Code");
+          }
+        } catch (e) {
+          toast.error("Erro ao gerar QR Code");
+        }
+      }
       setIsQrModalOpen(false);
     } finally {
       setIsGeneratingQr(false);
     }
   };
+
+  useEffect(() => {
+    if (!companyId) return;
+
+    const channel = supabase
+      .channel('channels_realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'channels',
+          filter: `company_id=eq.${companyId}`,
+        },
+        (payload: { new: any }) => {
+          console.log("Realtime Channel Update:", payload);
+          queryClient.invalidateQueries({ queryKey: ["channels", companyId] });
+          
+          if (selectedChannel?.id === (payload.new as ChannelData).id) {
+            const newStatus = (payload.new as ChannelData).status;
+            if (newStatus === 'connected') {
+              setIsQrModalOpen(false);
+              setActiveQrCode(null);
+              toast.success(`${(payload.new as any).name} conectado com sucesso!`);
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [companyId, selectedChannel?.id, queryClient]);
+
+  // Fallback Polling for connection status when QR Modal is open
+  useEffect(() => {
+    let pollInterval: NodeJS.Timeout;
+
+    if (isQrModalOpen && selectedChannel?.evolution_instance_name && selectedChannel?.evolution_api_url) {
+      pollInterval = setInterval(async () => {
+        try {
+          const state = await checkConnectionState(
+            selectedChannel.evolution_api_url!,
+            selectedChannel.evolution_api_key || '',
+            selectedChannel.evolution_instance_name!
+          );
+
+          if (state === 'open') {
+            console.log("Polling detected open connection!");
+            clearInterval(pollInterval);
+            
+            // Sync status with our database
+            await updateChannel(selectedChannel.id, { status: 'connected' });
+            queryClient.invalidateQueries({ queryKey: ["channels", companyId] });
+            
+            setIsQrModalOpen(false);
+            setActiveQrCode(null);
+            toast.success(`${selectedChannel.name} conectado com sucesso!`);
+          }
+        } catch (e) {
+          console.error("Error polling connection state:", e);
+        }
+      }, 5000); // Check every 5 seconds
+    }
+
+    return () => {
+      if (pollInterval) clearInterval(pollInterval);
+    };
+  }, [isQrModalOpen, selectedChannel, companyId, queryClient]);
 
   const simulateSuccessfulConnection = () => {
     if (selectedChannel) {
@@ -297,7 +382,7 @@ const Conexoes = () => {
           <div className="grid gap-4 py-4">
             <div className="flex flex-col gap-2">
               <Label>Canal</Label>
-              <Select value={type} onValueChange={(val: any) => setType(val)}>
+              <Select value={type} onValueChange={(val: 'whatsapp' | 'instagram') => setType(val)}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
