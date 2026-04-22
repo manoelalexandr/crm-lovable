@@ -198,7 +198,6 @@ const Conexoes = () => {
           filter: `company_id=eq.${companyId}`,
         },
         (payload: { new: any }) => {
-          console.log("Realtime Channel Update:", payload);
           queryClient.invalidateQueries({ queryKey: ["channels", companyId] });
           
           if (selectedChannel?.id === (payload.new as ChannelData).id) {
@@ -232,7 +231,6 @@ const Conexoes = () => {
           );
 
           if (state === 'open') {
-            console.log("Polling detected open connection!");
             clearInterval(pollInterval);
             
             // Sync status with our database
@@ -254,16 +252,6 @@ const Conexoes = () => {
     };
   }, [isQrModalOpen, selectedChannel, companyId, queryClient]);
 
-  const simulateSuccessfulConnection = () => {
-    if (selectedChannel) {
-      updateChannel(selectedChannel.id, { status: 'connected' }).then(() => {
-        queryClient.invalidateQueries({ queryKey: ["channels", companyId] });
-        setIsQrModalOpen(false);
-        setActiveQrCode(null);
-        toast.success(`${selectedChannel.name} conectado com sucesso!`);
-      });
-    }
-  };
 
   const handleDelete = (id: string) => {
     if (window.confirm("Certeza que deseja excluir esta conexão permanente?")) {
@@ -456,11 +444,6 @@ const Conexoes = () => {
           </div>
 
           <DialogFooter className="w-full mt-4 flex-col gap-2 sm:flex-col items-stretch">
-            {activeQrCode && (
-              <Button onClick={simulateSuccessfulConnection} className="w-full" variant="outline" size="sm">
-                (Botão de Teste) Simular que fiz a leitura
-              </Button>
-            )}
             <Button onClick={() => setIsQrModalOpen(false)} className="w-full">
                Fechar janela
             </Button>

@@ -1,6 +1,5 @@
 import { useState, useRef } from "react";
-import { Eye, Paperclip, Send, MoreVertical, ArrowRightLeft, Clock, MessageSquare, Search, StickyNote, Smartphone, Instagram, Loader2 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { CheckCircle2, Eye, Clock, Zap, Paperclip, Send, MoreVertical, MessageSquare, Search, Smartphone, Instagram, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -8,8 +7,8 @@ import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { useEffect } from "react";
 
-import { getTickets, getTicketMessages, sendMessage, sendMediaMessage, Ticket, Message } from "@/lib/api/tickets";
-import { getContactTags, TagData } from "@/lib/api/tags";
+import { getTickets, getTicketMessages, sendMessage, sendMediaMessage, resolveTicket, Ticket, Message } from "@/lib/api/tickets";
+import { getQuickResponses, QuickResponse } from "@/lib/api/quickResponses";
 import { useAuth } from "@/contexts/AuthContext";
 import { format, isToday, isYesterday } from "date-fns";
 import { ptBR } from "date-fns/locale";
@@ -37,6 +36,7 @@ const Atendimentos = () => {
   const [messageInput, setMessageInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  const [showQuickReplies, setShowQuickReplies] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const companyId = company?.id;
@@ -55,6 +55,19 @@ const Atendimentos = () => {
     enabled: !!selectedTicket?.id,
   });
 
+  // Busca respostas rápidas da empresa
+  const { data: quickResponses = [] } = useQuery<QuickResponse[]>({
+    queryKey: ["quick_responses", companyId],
+    queryFn: () => getQuickResponses(companyId!),
+    enabled: !!companyId,
+  });
+
+  // Filtra respostas rápidas com base no que foi digitado após "/"
+  const quickReplyFilter = messageInput.startsWith("/") ? messageInput.toLowerCase() : "";
+  const filteredQuickReplies = quickReplyFilter
+    ? quickResponses.filter((r) => r.shortcut.startsWith(quickReplyFilter))
+    : quickResponses;
+
   // Realtime subscription
   useEffect(() => {
     if (!companyId) return;
@@ -70,7 +83,6 @@ const Atendimentos = () => {
           filter: `company_id=eq.${companyId}`,
         },
         (payload) => {
-          console.log("Realtime Message Change:", payload);
           // Invalida tickets para atualizar contadores e última mensagem
           queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
           
@@ -90,7 +102,6 @@ const Atendimentos = () => {
           filter: `company_id=eq.${companyId}`,
         },
         (payload) => {
-          console.log("Realtime Ticket Update:", payload);
           // Invalida lista de tickets para refletir mudanças de status ou atribuição
           queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
           
@@ -120,6 +131,17 @@ const Atendimentos = () => {
       toast.error("Erro ao enviar mensagem.");
       console.error(error);
     }
+  });
+
+  // Mutation para finalizar atendimento
+  const resolveTicketMutation = useMutation({
+    mutationFn: () => resolveTicket(selectedTicket!.id),
+    onSuccess: () => {
+      toast.success("Atendimento finalizado!");
+      setSelectedTicket(null);
+      queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
+    },
+    onError: () => toast.error("Erro ao finalizar atendimento."),
   });
 
   const sendMediaMutation = useMutation({
@@ -164,6 +186,18 @@ const Atendimentos = () => {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  };
+
+  const handleMessageInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setMessageInput(val);
+    // Abre o popover de respostas rápidas automaticamente ao digitar "/"
+    setShowQuickReplies(val.startsWith("/"));
+  };
+
+  const applyQuickReply = (response: QuickResponse) => {
+    setMessageInput(response.content);
+    setShowQuickReplies(false);
   };
 
   const tabs = [
@@ -272,17 +306,25 @@ const Atendimentos = () => {
               <div>
                 <p className="text-sm font-bold truncate max-w-[200px]">{selectedTicket.contacts?.name || 'Cliente Desconhecido'}</p>
                 <div className="flex items-center gap-2">
-                  <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                    <div className="h-1.5 w-1.5 rounded-full bg-success" /> Online
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">•</span>
                   <span className="text-[10px] text-muted-foreground capitalize">{selectedTicket.source || 'whatsapp'}</span>
+                  <span className="text-[10px] text-muted-foreground">•</span>
+                  <span className="text-[10px] text-muted-foreground">#{selectedTicket.id.slice(0, 5).toUpperCase()}</span>
                 </div>
               </div>
             </div>
             <div className="flex items-center gap-1">
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" title="Agendar">
-                <Clock className="h-4 w-4" />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs gap-1.5 border-green-500/50 text-green-600 hover:bg-green-500/10 hover:text-green-700"
+                onClick={() => resolveTicketMutation.mutate()}
+                disabled={resolveTicketMutation.isPending}
+                title="Finalizar este atendimento"
+              >
+                {resolveTicketMutation.isPending
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <CheckCircle2 className="h-3.5 w-3.5" />}
+                Finalizar
               </Button>
               <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" title="Mais opções">
                 <MoreVertical className="h-4 w-4" />
@@ -366,33 +408,80 @@ const Atendimentos = () => {
 
               {/* Chat Input */}
               <div className="border-t border-border p-3 bg-card">
+                {/* Popover de Respostas Rápidas */}
+                {showQuickReplies && filteredQuickReplies.length > 0 && (
+                  <div className="mb-2 bg-card border border-border rounded-lg shadow-lg overflow-hidden max-h-48 overflow-y-auto">
+                    <div className="px-3 py-1.5 border-b border-border bg-secondary/40 flex items-center gap-1.5">
+                      <Zap className="h-3 w-3 text-primary" />
+                      <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Respostas Rápidas</span>
+                    </div>
+                    {filteredQuickReplies.map((r) => (
+                      <button
+                        key={r.id}
+                        onClick={() => applyQuickReply(r)}
+                        className="w-full flex items-start gap-3 px-3 py-2 hover:bg-secondary/60 transition-colors text-left"
+                      >
+                        <code className="shrink-0 text-[10px] font-mono font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded mt-0.5">
+                          {r.shortcut}
+                        </code>
+                        <span className="text-xs text-muted-foreground truncate">{r.content}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {/* Aviso quando digita "/" mas não há correspondências */}
+                {showQuickReplies && filteredQuickReplies.length === 0 && quickResponses.length === 0 && (
+                  <div className="mb-2 px-3 py-2 bg-secondary/30 border border-border rounded-lg">
+                    <p className="text-xs text-muted-foreground">Nenhuma resposta rápida cadastrada. <a href="/respostas-rapidas" className="text-primary underline">Criar agora →</a></p>
+                  </div>
+                )}
+
                 <div className="flex items-center gap-2">
-                  <input 
-                    type="file" 
-                    className="hidden" 
-                    ref={fileInputRef} 
+                  <input
+                    type="file"
+                    className="hidden"
+                    ref={fileInputRef}
                     onChange={handleFileUpload}
                   />
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     className="h-8 w-8 shrink-0"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isUploading || !selectedTicket}
+                    title="Enviar arquivo"
                   >
                     {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0">
-                    <MessageSquare className="h-4 w-4" />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`h-8 w-8 shrink-0 transition-colors ${showQuickReplies ? 'text-primary bg-primary/10' : 'text-muted-foreground hover:text-primary'}`}
+                    onClick={() => {
+                      if (!showQuickReplies) {
+                        setMessageInput("/");
+                        setShowQuickReplies(true);
+                      } else {
+                        setShowQuickReplies(false);
+                        setMessageInput("");
+                      }
+                    }}
+                    title="Respostas rápidas (ou digite /)"
+                  >
+                    <Zap className="h-4 w-4" />
                   </Button>
                   <Input
-                    placeholder="Digite uma mensagem..."
+                    placeholder="Digite uma mensagem ou / para respostas rápidas..."
                     value={messageInput}
-                    onChange={e => setMessageInput(e.target.value)}
+                    onChange={handleMessageInputChange}
                     onKeyDown={e => {
+                      if (e.key === 'Escape') {
+                        setShowQuickReplies(false);
+                        return;
+                      }
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
-                        if (messageInput.trim()) {
+                        if (messageInput.trim() && !messageInput.startsWith('/')) {
                           sendMessageMutation.mutate(messageInput);
                         }
                       }
@@ -400,15 +489,16 @@ const Atendimentos = () => {
                     className="h-9 text-sm"
                     disabled={sendMessageMutation.isPending || isUploading}
                   />
-                  <Button 
-                    size="icon" 
-                    className="h-8 w-8 shrink-0" 
+                  <Button
+                    size="icon"
+                    className="h-8 w-8 shrink-0"
                     onClick={() => {
-                      if (messageInput.trim()) {
+                      if (messageInput.trim() && !messageInput.startsWith('/')) {
                         sendMessageMutation.mutate(messageInput);
                       }
                     }}
-                    disabled={sendMessageMutation.isPending || !messageInput.trim() || isUploading}
+                    disabled={sendMessageMutation.isPending || !messageInput.trim() || isUploading || messageInput.startsWith('/')}
+                    title="Enviar mensagem"
                   >
                     {sendMessageMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                   </Button>

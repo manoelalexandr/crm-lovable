@@ -232,3 +232,22 @@ export async function sendMediaMessage(
 
   return msgData as Message;
 }
+
+/**
+ * Resolve (finaliza) um ticket, movendo-o para o status 'resolved'.
+ * O webhook de inbound irá reabri-lo automaticamente se o cliente enviar
+ * uma nova mensagem após esta data.
+ */
+export async function resolveTicket(ticketId: string): Promise<void> {
+  const { error } = await supabase
+    .from('tickets')
+    .update({
+      status: 'resolved',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', ticketId);
+
+  if (error) {
+    throw error;
+  }
+}

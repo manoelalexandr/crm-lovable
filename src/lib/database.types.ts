@@ -963,6 +963,38 @@ export type Database = {
           },
         ]
       }
+      quick_responses: {
+        Row: {
+          company_id: string
+          content: string
+          created_at: string
+          id: string
+          shortcut: string
+        }
+        Insert: {
+          company_id: string
+          content: string
+          created_at?: string
+          id?: string
+          shortcut: string
+        }
+        Update: {
+          company_id?: string
+          content?: string
+          created_at?: string
+          id?: string
+          shortcut?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "quick_responses_company_id_fkey"
+            columns: ["company_id"]
+            isOneToOne: false
+            referencedRelation: "companies"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       schedules: {
         Row: {
           assigned_to: string | null
@@ -1373,8 +1405,7 @@ export type Database = {
         Returns: string
       }
       get_dashboard_metrics: { Args: { p_company_id: string }; Returns: Json }
-      get_user_company_id: { Args: never; Returns: string }
-      is_company_admin: { Args: never; Returns: boolean }
+      get_jwt_company_id: { Args: never; Returns: string }
     }
     Enums: {
       [_ in never]: never

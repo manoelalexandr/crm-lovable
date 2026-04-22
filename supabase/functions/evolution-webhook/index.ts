@@ -124,8 +124,10 @@ Deno.serve(async (req: Request) => {
         contact = newContact;
       }
 
-      // 4. Encontrar ou criar ticket aberto
-      const { data: existingTicket, error: ticketError } = await supabase
+      // 4. Encontrar ticket aberto (waiting ou attending).
+      //    Se o único ticket for 'resolved', reabre criando um NOVO ticket —
+      //    regra de negócio: nova mensagem após finalização = novo atendimento.
+      const { data: activeTicket } = await supabase
         .from("tickets")
         .select("*")
         .eq("company_id", companyId)
@@ -136,9 +138,13 @@ Deno.serve(async (req: Request) => {
         .limit(1)
         .maybeSingle();
 
-      let ticket = existingTicket;
+      let ticket = activeTicket;
 
       if (!ticket) {
+        // Nenhum ticket ativo — pode ser primeiro contato OU retorno após resolução.
+        // Em ambos os casos, criamos um novo ticket (= reabertura automática).
+        console.log(`[Webhook] Nenhum ticket ativo para contact=${contact.id}. Criando novo (reabertura ou primeiro contato).`);
+
         const { data: newTicket, error: createTicketError } = await supabase
           .from("tickets")
           .insert({
@@ -146,8 +152,8 @@ Deno.serve(async (req: Request) => {
             contact_id: contact.id,
             channel_id: channel.id,
             status: "waiting",
-            source: "whatsapp",
-            unread_count: 0
+            source: channel.type || "whatsapp",
+            unread_count: 0,
           })
           .select()
           .single();

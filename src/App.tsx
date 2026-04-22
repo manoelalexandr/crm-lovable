@@ -11,6 +11,7 @@ import Atendimentos from "./pages/Atendimentos";
 import Kanban from "./pages/Kanban";
 import Contatos from "./pages/Contatos";
 import Tags from "./pages/Tags";
+import RespostasRapidas from "./pages/RespostasRapidas";
 import Conexoes from "./pages/Conexoes";
 import NotFound from "./pages/NotFound";
 import { AuthProvider } from "./contexts/AuthContext";
@@ -43,6 +44,7 @@ const App = () => (
                 <Route path="kanban" element={<Kanban />} />
                 <Route path="contatos" element={<Contatos />} />
                 <Route path="tags" element={<Tags />} />
+                <Route path="respostas-rapidas" element={<RespostasRapidas />} />
                 <Route path="conexoes" element={<Conexoes />} />
               </Route>
             </Route>
