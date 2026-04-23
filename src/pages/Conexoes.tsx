@@ -29,13 +29,13 @@ const Conexoes = () => {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
-  
+
   // States do formulário
   const [name, setName] = useState("");
   const [type, setType] = useState<'whatsapp' | 'instagram'>('whatsapp');
   const [evoUrl, setEvoUrl] = useState("http://sua-evolution-api.com");
   const [evoKey, setEvoKey] = useState("SUA_API_KEY_GLOBAL");
-  
+
   const [activeQrCode, setActiveQrCode] = useState<string | null>(null);
   const [selectedChannel, setSelectedChannel] = useState<ChannelData | null>(null);
   const [isGeneratingQr, setIsGeneratingQr] = useState(false);
@@ -69,7 +69,7 @@ const Conexoes = () => {
       setIsEditMode(false);
       setSelectedChannel(null);
       toast.success(isEditMode ? "Conexão atualizada!" : "Conexão salva!");
-      
+
       if (!isEditMode && newChannel.type === 'whatsapp') {
         openQrCode(newChannel);
       }
@@ -106,7 +106,7 @@ const Conexoes = () => {
         method: 'GET',
         headers: { 'apikey': cleanKey }
       });
-      
+
       if (res.ok) {
         toast.success("Conexão bem-sucedida! A URL e a Chave estão corretas.");
       } else {
@@ -153,7 +153,7 @@ const Conexoes = () => {
     setSelectedChannel(channel);
     setIsQrModalOpen(true);
     setIsGeneratingQr(true);
-    
+
     try {
       if (channel.evolution_api_url && channel.evolution_instance_name) {
         const res = await generateEvolutionQR(channel.evolution_api_url, channel.evolution_api_key || '', channel.evolution_instance_name);
@@ -199,7 +199,7 @@ const Conexoes = () => {
         },
         (payload: { new: any }) => {
           queryClient.invalidateQueries({ queryKey: ["channels", companyId] });
-          
+
           if (selectedChannel?.id === (payload.new as ChannelData).id) {
             const newStatus = (payload.new as ChannelData).status;
             if (newStatus === 'connected') {
@@ -232,11 +232,11 @@ const Conexoes = () => {
 
           if (state === 'open') {
             clearInterval(pollInterval);
-            
+
             // Sync status with our database
             await updateChannel(selectedChannel.id, { status: 'connected' });
             queryClient.invalidateQueries({ queryKey: ["channels", companyId] });
-            
+
             setIsQrModalOpen(false);
             setActiveQrCode(null);
             toast.success(`${selectedChannel.name} conectado com sucesso!`);
@@ -380,7 +380,7 @@ const Conexoes = () => {
                 </SelectContent>
               </Select>
             </div>
-            
+
             <div className="flex flex-col gap-2">
               <Label htmlFor="name">Nome interno da conexão</Label>
               <Input id="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex: Suporte Principal" />
@@ -422,30 +422,30 @@ const Conexoes = () => {
               Abra o WhatsApp no seu celular, vá em Aparelhos Conectados e aponte a câmera.
             </DialogDescription>
           </DialogHeader>
-          
+
           <div className="my-6 p-4 bg-white rounded-xl border border-border shadow-sm flex items-center justify-center min-h-[250px] min-w-[250px]">
-             {isGeneratingQr ? (
-               <div className="flex flex-col items-center gap-3">
-                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                 <span className="text-sm text-slate-500 font-medium">Buscando QR Code na Evolution API...</span>
-               </div>
-             ) : activeQrCode ? (
-               <img src={activeQrCode} alt="WhatsApp QR Code" className="w-[220px] h-[220px]" />
-             ) : (
-               <div className="flex justify-center flex-col items-center gap-2">
-                  <WifiOff className="h-8 w-8 text-destructive" />
-                  <span className="text-sm text-destructive">Falha ao gerar QR Code.</span>
-               </div>
-             )}
+            {isGeneratingQr ? (
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <span className="text-sm text-slate-500 font-medium">Buscando QR Code na Evolution API...</span>
+              </div>
+            ) : activeQrCode ? (
+              <img src={activeQrCode} alt="WhatsApp QR Code" className="w-[220px] h-[220px]" />
+            ) : (
+              <div className="flex justify-center flex-col items-center gap-2">
+                <WifiOff className="h-8 w-8 text-destructive" />
+                <span className="text-sm text-destructive">Falha ao gerar QR Code.</span>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col w-full gap-2 text-sm text-muted-foreground bg-secondary/50 p-3 rounded-lg text-left">
-            <p className="flex items-center gap-2"><Wifi justify-center className="h-4 w-4 text-success" /> Mantenha o celular conectado à internet.</p>
+            <p className="flex items-center gap-2"><Wifi className="h-4 w-4 text-success" /> Mantenha o celular conectado à internet.</p>
           </div>
 
           <DialogFooter className="w-full mt-4 flex-col gap-2 sm:flex-col items-stretch">
             <Button onClick={() => setIsQrModalOpen(false)} className="w-full">
-               Fechar janela
+              Fechar janela
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,5 +1,3 @@
-// @ts-nocheck
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.42.0";
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
@@ -21,23 +19,50 @@ Deno.serve(async (req: Request) => {
     const data = payload.data;
 
     if (event === "MESSAGES_UPSERT" || event === "messages.upsert") {
-      const message = data.message;
-      const key = message.key;
-      const fromMe = key.fromMe;
-      const pushName = message.pushName;
-      const remoteJid = key.remoteJid;
+      // 1. TRAVAS DE SEGURANÇA ULTRA ROBUSTAS
+
+      // Evolution API pode enviar o payload de várias formas dependendo da versão
+      let actualData = data;
+      if (Array.isArray(data)) {
+        actualData = data[0]; // Versões antigas mandavam array
+      } else if (data?.messages && Array.isArray(data.messages)) {
+        actualData = data.messages[0]; // Baileys padrão manda dentro de data.messages
+      }
+
+      const messageObj = actualData?.message;
+      const key = actualData?.key || messageObj?.key;
+      const pushName = actualData?.pushName || messageObj?.pushName || "";
+
+      if (!key) {
+        console.log("[Webhook] Payload não contém 'key', ignorando. Data recebida:", JSON.stringify(data));
+        return new Response("No key object", { status: 200 });
+      }
+
+      const remoteJid = key?.remoteJid;
+      if (!remoteJid || remoteJid === "status@broadcast") {
+        console.log("[Webhook] Mensagem de status ou sem JID, ignorando.");
+        return new Response("Ignored broadcast", { status: 200 });
+      }
+
+      const fromMe = key?.fromMe;
       const phoneNumber = remoteJid.split("@")[0];
-      
-      // Identificar o tipo de mensagem e conteúdo
-      const messageType = Object.keys(message.message || {}).find(k => 
+
+      // Identificar o tipo de mensagem
+      const messageType = actualData?.messageType || Object.keys(messageObj || {}).find(k =>
         ['conversation', 'extendedTextMessage', 'imageMessage', 'audioMessage', 'videoMessage', 'documentMessage'].includes(k)
       );
-      
-      let messageContent = message.message?.conversation || message.message?.extendedTextMessage?.text || "";
+
+      let messageContent = messageObj?.conversation || messageObj?.extendedTextMessage?.text || "";
       let mediaUrl = null;
       let mediaType = "text";
 
-      // 1. Encontrar o canal pela instância
+      // Se for apenas uma confirmação de leitura vazia, ignora para não poluir o banco
+      if (!messageContent && !messageType) {
+        console.log("[Webhook] Mensagem sem conteúdo legível, ignorando.");
+        return new Response("Empty content", { status: 200 });
+      }
+
+      // Encontrar o canal pela instância
       const { data: channel, error: channelError } = await supabase
         .from("channels")
         .select("*")
@@ -49,34 +74,34 @@ Deno.serve(async (req: Request) => {
         return new Response("Channel not found", { status: 404 });
       }
 
-      // 2. Processar Mídia se necessário
-      if (['imageMessage', 'audioMessage', 'videoMessage', 'documentMessage'].includes(messageType)) {
-        mediaType = messageType.replace('Message', '');
+      // Processar Mídia se necessário
+      if (['imageMessage', 'audioMessage', 'videoMessage', 'documentMessage'].includes(messageType || '')) {
+        mediaType = messageType!.replace('Message', '');
         console.log(`[Webhook] Processando mídia do tipo: ${mediaType}`);
-        
+
         try {
-          const fetchMediaUrl = `${channel.evolution_api_url.replace(/\/$/, '')}/chat/fetchMedia`;
+          const fetchMediaUrl = `${channel.evolution_api_url.replace(/\/$/, '')}/chat/getBase64FromMediaMessage/${instanceName}`;
           const response = await fetch(fetchMediaUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'apikey': channel.evolution_api_key
             },
-            body: JSON.stringify({ message: message })
+            body: JSON.stringify({ message: messageObj })
           });
 
           if (response.ok) {
             const mediaData = await response.json();
             const base64Data = mediaData.base64 || mediaData.media;
-            
+
             if (base64Data) {
               const buffer = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
               const fileName = `${Date.now()}-${key.id}.${mediaType === 'audio' ? 'ogg' : mediaType === 'image' ? 'jpg' : 'bin'}`;
               const filePath = `${channel.company_id}/${fileName}`;
-              
+
               const { data: uploadData, error: uploadError } = await supabase.storage
                 .from('chat_media')
-                .upload(filePath, buffer, { 
+                .upload(filePath, buffer, {
                   contentType: mediaType === 'audio' ? 'audio/ogg' : mediaType === 'image' ? 'image/jpeg' : 'application/octet-stream',
                   upsert: true
                 });
@@ -99,7 +124,7 @@ Deno.serve(async (req: Request) => {
 
       const companyId = channel.company_id;
 
-      // 3. Encontrar ou criar o contato
+      // Encontrar ou criar o contato
       const { data: existingContact, error: contactError } = await supabase
         .from("contacts")
         .select("*")
@@ -119,14 +144,12 @@ Deno.serve(async (req: Request) => {
           })
           .select()
           .single();
-        
+
         if (createContactError) throw createContactError;
         contact = newContact;
       }
 
-      // 4. Encontrar ticket aberto (waiting ou attending).
-      //    Se o único ticket for 'resolved', reabre criando um NOVO ticket —
-      //    regra de negócio: nova mensagem após finalização = novo atendimento.
+      // Encontrar ticket aberto
       const { data: activeTicket } = await supabase
         .from("tickets")
         .select("*")
@@ -141,10 +164,7 @@ Deno.serve(async (req: Request) => {
       let ticket = activeTicket;
 
       if (!ticket) {
-        // Nenhum ticket ativo — pode ser primeiro contato OU retorno após resolução.
-        // Em ambos os casos, criamos um novo ticket (= reabertura automática).
-        console.log(`[Webhook] Nenhum ticket ativo para contact=${contact.id}. Criando novo (reabertura ou primeiro contato).`);
-
+        console.log(`[Webhook] Nenhum ticket ativo para contact=${contact.id}. Criando novo.`);
         const { data: newTicket, error: createTicketError } = await supabase
           .from("tickets")
           .insert({
@@ -162,7 +182,7 @@ Deno.serve(async (req: Request) => {
         ticket = newTicket;
       }
 
-      // 5. Inserir a mensagem
+      // Inserir a mensagem
       const { error: insertMsgError } = await supabase
         .from("messages")
         .insert({
@@ -172,13 +192,12 @@ Deno.serve(async (req: Request) => {
           content: messageContent,
           type: mediaUrl ? mediaType : "text",
           media_url: mediaUrl,
-          status: "received",
           external_id: key.id
         });
 
       if (insertMsgError) throw insertMsgError;
 
-      // 6. Atualizar meta do ticket
+      // Atualizar meta do ticket
       await supabase
         .from("tickets")
         .update({
@@ -194,15 +213,14 @@ Deno.serve(async (req: Request) => {
 
     if (event === "CONNECTION_UPDATE") {
       console.log("Connection update received:", data);
-      const state = data.state; // 'open', 'connecting', 'close', etc.
-      
+      const state = data.state;
       let dbStatus = 'disconnected';
       if (state === 'open') dbStatus = 'connected';
       else if (state === 'connecting') dbStatus = 'connecting';
-      
+
       const { error: updateError } = await supabase
         .from("channels")
-        .update({ 
+        .update({
           status: dbStatus,
           updated_at: new Date().toISOString()
         })
