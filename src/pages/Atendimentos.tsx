@@ -85,11 +85,11 @@ const Atendimentos = () => {
         (payload) => {
           // Invalida tickets para atualizar contadores e última mensagem
           queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
-          
+
           // Se for uma nova mensagem para o ticket aberto, atualiza mensagens
           const newMessage = payload.new as { ticket_id: string };
           if (newMessage && newMessage.ticket_id === selectedTicket?.id) {
-             queryClient.invalidateQueries({ queryKey: ["messages", selectedTicket.id] });
+            queryClient.invalidateQueries({ queryKey: ["messages", selectedTicket.id] });
           }
         }
       )
@@ -104,7 +104,7 @@ const Atendimentos = () => {
         (payload) => {
           // Invalida lista de tickets para refletir mudanças de status ou atribuição
           queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
-          
+
           // Se o ticket selecionado foi o que mudou, atualiza seus dados sem perder os campos joinados (contacts)
           const updatedTicket = payload.new as Ticket;
           if (updatedTicket && updatedTicket.id === selectedTicket?.id) {
@@ -135,17 +135,19 @@ const Atendimentos = () => {
 
   // Mutation para finalizar atendimento
   const resolveTicketMutation = useMutation({
-    mutationFn: () => resolveTicket(selectedTicket!.id),
+    mutationFn: () => resolveTicket(selectedTicket!.id, companyId!), // <--- Adicionado companyId! aqui
     onSuccess: () => {
       toast.success("Atendimento finalizado!");
       setSelectedTicket(null);
       queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
+      // Invalida o Kanban também para forçar a atualização visual em tempo real
+      queryClient.invalidateQueries({ queryKey: ["kanban", companyId] });
     },
     onError: () => toast.error("Erro ao finalizar atendimento."),
   });
 
   const sendMediaMutation = useMutation({
-    mutationFn: ({ url, type }: { url: string, type: any }) => 
+    mutationFn: ({ url, type }: { url: string, type: any }) =>
       sendMediaMessage(selectedTicket!.id, url, type, companyId!, user!.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["messages", selectedTicket?.id] });
@@ -171,7 +173,7 @@ const Atendimentos = () => {
       if (error) throw error;
 
       const { data: { publicUrl } } = supabase.storage.from('chat_media').getPublicUrl(filePath);
-      
+
       let mediaType: 'image' | 'audio' | 'video' | 'document' = 'document';
       if (file.type.startsWith('image/')) mediaType = 'image';
       else if (file.type.startsWith('audio/')) mediaType = 'audio';
@@ -247,50 +249,50 @@ const Atendimentos = () => {
 
         {/* Ticket List */}
         <div className="flex-1 overflow-y-auto scrollbar-thin">
-              {isLoadingTickets && currentList.length === 0 ? (
-                <div className="p-4 text-center text-sm text-muted-foreground">Carregando tickets...</div>
-              ) : currentList.map(ticket => {
-                const contactName = ticket.contacts?.name || ticket.contacts?.phone || 'Desconhecido';
-                const channel = ticket.source || 'whatsapp';
-                const timeFormatted = ticket.last_message_at 
-                  ? format(new Date(ticket.last_message_at), 'HH:mm')
-                  : '';
-                  
-                return (
-                  <div
-                    key={ticket.id}
-                    onClick={() => setSelectedTicket(ticket)}
-                    className={`flex items-start gap-3 p-3 border-b border-border cursor-pointer transition-colors
+          {isLoadingTickets && currentList.length === 0 ? (
+            <div className="p-4 text-center text-sm text-muted-foreground">Carregando tickets...</div>
+          ) : currentList.map(ticket => {
+            const contactName = ticket.contacts?.name || ticket.contacts?.phone || 'Desconhecido';
+            const channel = ticket.source || 'whatsapp';
+            const timeFormatted = ticket.last_message_at
+              ? format(new Date(ticket.last_message_at), 'HH:mm')
+              : '';
+
+            return (
+              <div
+                key={ticket.id}
+                onClick={() => setSelectedTicket(ticket)}
+                className={`flex items-start gap-3 p-3 border-b border-border cursor-pointer transition-colors
                       ${selectedTicket?.id === ticket.id ? "bg-sidebar-accent" : "hover:bg-secondary/50"}`}
-                  >
-                    <div className="h-9 w-9 rounded-full bg-muted flex items-center justify-center shrink-0 text-sm font-medium text-muted-foreground">
-                      {contactName.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium truncate">{contactName}</span>
-                        <span className="text-[11px] text-muted-foreground">{timeFormatted}</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground truncate mt-0.5">{ticket.last_message || 'Sem mensagens'}</p>
-                      <div className="flex items-center gap-1.5 mt-1">
-                        <ChannelBadge channel={channel} />
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-center gap-1">
-                      {ticket.unread_count > 0 && (
-                        <span className="bg-primary text-primary-foreground text-[10px] font-bold rounded-full h-4 min-w-4 flex items-center justify-center px-1">
-                          {ticket.unread_count}
-                        </span>
-                      )}
-                      {activeTab === "aguardando" && (
-                        <button className="text-muted-foreground hover:text-primary" title="Espiar conversa">
-                          <Eye className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
+              >
+                <div className="h-9 w-9 rounded-full bg-muted flex items-center justify-center shrink-0 text-sm font-medium text-muted-foreground">
+                  {contactName.charAt(0).toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium truncate">{contactName}</span>
+                    <span className="text-[11px] text-muted-foreground">{timeFormatted}</span>
                   </div>
-                );
-              })}
+                  <p className="text-xs text-muted-foreground truncate mt-0.5">{ticket.last_message || 'Sem mensagens'}</p>
+                  <div className="flex items-center gap-1.5 mt-1">
+                    <ChannelBadge channel={channel} />
+                  </div>
+                </div>
+                <div className="flex flex-col items-center gap-1">
+                  {ticket.unread_count > 0 && (
+                    <span className="bg-primary text-primary-foreground text-[10px] font-bold rounded-full h-4 min-w-4 flex items-center justify-center px-1">
+                      {ticket.unread_count}
+                    </span>
+                  )}
+                  {activeTab === "aguardando" && (
+                    <button className="text-muted-foreground hover:text-primary" title="Espiar conversa">
+                      <Eye className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -356,9 +358,9 @@ const Atendimentos = () => {
                     <div key={group.date} className="space-y-4">
                       <div className="flex justify-center">
                         <span className="text-[10px] uppercase font-bold text-muted-foreground bg-background px-2 py-0.5 rounded-full border border-border">
-                          {isToday(new Date(group.date)) ? 'Hoje' : 
-                           isYesterday(new Date(group.date)) ? 'Ontem' : 
-                           format(new Date(group.date), "dd 'de' MMMM", { locale: ptBR })}
+                          {isToday(new Date(group.date)) ? 'Hoje' :
+                            isYesterday(new Date(group.date)) ? 'Ontem' :
+                              format(new Date(group.date), "dd 'de' MMMM", { locale: ptBR })}
                         </span>
                       </div>
                       {group.messages.map((msg: Message) => {
@@ -369,7 +371,7 @@ const Atendimentos = () => {
                               ${isAgent
                                 ? "bg-primary text-primary-foreground rounded-tr-none"
                                 : "bg-card border border-border text-foreground rounded-tl-none"}`}>
-                              
+
                               {msg.type === 'image' && msg.media_url && (
                                 <div className="mb-2 rounded overflow-hidden cursor-pointer hover:opacity-90 transition-opacity" onClick={() => window.open(msg.media_url!, '_blank')}>
                                   <img src={msg.media_url} alt="Imagem" className="max-w-full h-auto rounded" />
@@ -514,13 +516,13 @@ const Atendimentos = () => {
                 </div>
                 <h3 className="font-bold text-center text-sm">{selectedTicket.contacts?.name || 'Cliente Desconhecido'}</h3>
                 <p className="text-xs text-muted-foreground">{selectedTicket.contacts?.phone}</p>
-                
+
                 <div className="w-full mt-6 space-y-4">
                   <div>
                     <h4 className="text-[10px] uppercase font-bold text-muted-foreground mb-2">Canal Original</h4>
                     <ChannelBadge channel={selectedTicket.source || 'whatsapp'} />
                   </div>
-                  
+
                   <div>
                     <h4 className="text-[10px] uppercase font-bold text-muted-foreground mb-2">Informações</h4>
                     <div className="space-y-2">
