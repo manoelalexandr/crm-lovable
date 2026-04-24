@@ -4,15 +4,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { 
-  getKanbanBoard, 
-  updateTicketColumn, 
-  createKanbanColumn, 
-  updateColumnsPositions, 
+import {
+  getKanbanBoard,
+  updateTicketColumn,
+  createKanbanColumn,
+  updateColumnsPositions,
   updateKanbanColumn,
   deleteKanbanColumn,
-  KanbanColumnData, 
-  KanbanTicket 
+  KanbanColumnData,
+  KanbanTicket
 } from "@/lib/api/kanban";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
@@ -52,12 +52,12 @@ const Kanban = () => {
   const { company } = useAuth();
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
-  
+
   // Modals state
   const [isAddColumnOpen, setIsAddColumnOpen] = useState(false);
   const [isEditColumnOpen, setIsEditColumnOpen] = useState(false);
   const [isDeleteColumnOpen, setIsDeleteColumnOpen] = useState(false);
-  
+
   // Form states
   const [newColumnTitle, setNewColumnTitle] = useState("");
   const [newColumnColor, setNewColumnColor] = useState("open");
@@ -138,14 +138,14 @@ const Kanban = () => {
     onMutate: async (newColumns) => {
       await queryClient.cancelQueries({ queryKey: ["kanban", companyId] });
       const previousData = queryClient.getQueryData<{ columns: KanbanColumnData[], tickets: KanbanTicket[] }>(["kanban", companyId]);
-      
+
       if (previousData) {
         queryClient.setQueryData(["kanban", companyId], {
           ...previousData,
           columns: newColumns
         });
       }
-      
+
       return { previousData };
     },
     onError: (error, __, context) => {
@@ -161,21 +161,21 @@ const Kanban = () => {
   });
 
   const moveTicketMutation = useMutation({
-    mutationFn: ({ ticketId, columnId }: { ticketId: string; columnId: string }) => 
+    mutationFn: ({ ticketId, columnId }: { ticketId: string; columnId: string }) =>
       updateTicketColumn(ticketId, columnId),
     onMutate: async ({ ticketId, columnId }) => {
       await queryClient.cancelQueries({ queryKey: ["kanban", companyId] });
       const previousData = queryClient.getQueryData<{ columns: KanbanColumnData[], tickets: KanbanTicket[] }>(["kanban", companyId]);
-      
+
       if (previousData) {
         queryClient.setQueryData(["kanban", companyId], {
           ...previousData,
-          tickets: previousData.tickets.map(t => 
+          tickets: previousData.tickets.map(t =>
             t.id === ticketId ? { ...t, kanban_column_id: columnId } : t
           )
         });
       }
-      
+
       return { previousData };
     },
     onError: (error, __, context) => {
@@ -239,7 +239,7 @@ const Kanban = () => {
     if (active.data.current?.type === "Column" && activeId !== overId) {
       const oldIndex = columns.findIndex(col => col.id === activeId);
       const newIndex = columns.findIndex(col => col.id === overId);
-      
+
       const newOrder = arrayMove(columns, oldIndex, newIndex);
       const updates = newOrder.map((col, idx) => ({ ...col, position: idx }));
       updateColumnsMutation.mutate(updates);
@@ -295,15 +295,15 @@ const Kanban = () => {
       <div className="flex items-center justify-between mb-6 shrink-0">
         <h1 className="text-xl font-bold text-primary">Kanban</h1>
         <div className="flex items-center gap-3">
-          <Input 
-            placeholder="Buscar por nome..." 
+          <Input
+            placeholder="Buscar por nome..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-64 h-9 text-sm"
           />
-          <Button 
-            size="sm" 
-            variant="outline" 
+          <Button
+            size="sm"
+            variant="outline"
             className="h-9 border-primary text-primary hover:bg-primary hover:text-primary-foreground"
             onClick={() => {
               setNewColumnTitle("");
@@ -330,8 +330,8 @@ const Kanban = () => {
               <KanbanColumn
                 key={col.id}
                 column={col}
-                tickets={tickets.filter(t => 
-                  t.kanban_column_id === col.id && 
+                tickets={tickets.filter(t =>
+                  t.kanban_column_id === col.id &&
                   t.contact_name.toLowerCase().includes(searchQuery.toLowerCase())
                 )}
                 allColumns={columns}
@@ -352,8 +352,8 @@ const Kanban = () => {
                 tickets={tickets.filter(t => t.kanban_column_id === activeColumn.id)}
                 allColumns={columns}
                 companyId={companyId!}
-                onEdit={() => {}}
-                onDelete={() => {}}
+                onEdit={() => { }}
+                onDelete={() => { }}
               />
             )}
             {activeCard && (

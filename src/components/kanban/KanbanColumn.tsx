@@ -13,13 +13,13 @@ interface KanbanColumnProps {
   onDelete: (columnId: string) => void;
 }
 
-export const KanbanColumn = ({ 
-  column, 
-  tickets, 
-  allColumns, 
-  companyId, 
-  onEdit, 
-  onDelete 
+export const KanbanColumn = ({
+  column,
+  tickets,
+  allColumns,
+  companyId,
+  onEdit,
+  onDelete
 }: KanbanColumnProps) => {
   const {
     attributes,
@@ -74,8 +74,8 @@ export const KanbanColumn = ({
       className="flex flex-col w-72 shrink-0 h-full"
     >
       {/* Column Header */}
-      <div 
-        {...attributes} 
+      <div
+        {...attributes}
         {...listeners}
         className={`${getHeaderBg(column.color)} text-primary-foreground rounded-t-lg px-3 py-2.5 flex items-center justify-between cursor-grab active:cursor-grabbing group/header`}
       >
@@ -83,16 +83,16 @@ export const KanbanColumn = ({
           <span className="text-sm font-semibold truncate max-w-[150px]">{column.title}</span>
           <span className="text-[10px] opacity-80">Total: {totalValue()}</span>
         </div>
-        
+
         <div className="flex items-center gap-1 opacity-0 group-hover/header:opacity-100 transition-opacity">
-          <button 
-            onClick={(e) => { e.stopPropagation(); onEdit(column); }} 
+          <button
+            onClick={(e) => { e.stopPropagation(); onEdit(column); }}
             className="p-1 hover:bg-white/20 rounded transition-colors"
           >
             <Edit2 className="h-3.5 w-3.5" />
           </button>
-          <button 
-            onClick={(e) => { e.stopPropagation(); onDelete(column.id); }} 
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(column.id); }}
             className="p-1 hover:bg-white/20 rounded transition-colors text-white/90 hover:text-white"
           >
             <Trash2 className="h-3.5 w-3.5" />
@@ -107,11 +107,11 @@ export const KanbanColumn = ({
             <p className="text-xs text-muted-foreground text-center py-8">Nenhum ticket</p>
           ) : (
             tickets.map(ticket => (
-              <KanbanCard 
-                key={ticket.id} 
-                card={ticket} 
-                columns={allColumns} 
-                companyId={companyId} 
+              <KanbanCard
+                key={ticket.id}
+                card={ticket}
+                columns={allColumns}
+                companyId={companyId}
               />
             ))
           )}

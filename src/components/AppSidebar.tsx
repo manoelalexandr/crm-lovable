@@ -7,6 +7,7 @@ import {
   Tag,
   Plug,
   Zap,
+  Shield,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -15,13 +16,14 @@ interface SidebarProps {
 
 // ─── Rotas ativas no MVP ───────────────────────────────────────────────────
 const activeMenuItems = [
-  { label: "Dashboard",         icon: LayoutDashboard, path: "/dashboard" },
-  { label: "Atendimentos",      icon: Headphones,      path: "/atendimentos" },
-  { label: "Respostas Rápidas", icon: Zap,             path: "/respostas-rapidas" },
-  { label: "Kanban",            icon: SquareKanban,    path: "/kanban" },
-  { label: "Contatos",          icon: Users,           path: "/contatos" },
-  { label: "Tags",              icon: Tag,             path: "/tags" },
-  { label: "Conexões",          icon: Plug,            path: "/conexoes" },
+  { label: "Dashboard", icon: LayoutDashboard, path: "/dashboard" },
+  { label: "Atendimentos", icon: Headphones, path: "/atendimentos" },
+  { label: "Respostas Rápidas", icon: Zap, path: "/respostas-rapidas" },
+  { label: "Kanban", icon: SquareKanban, path: "/kanban" },
+  { label: "Contatos", icon: Users, path: "/contatos" },
+  { label: "Tags", icon: Tag, path: "/tags" },
+  { label: "Conexões", icon: Plug, path: "/conexoes" },
+  { label: "Equipe", icon: Shield, path: "/equipe" },
 ];
 
 // ─── Itens reservados para v2.0 (não visíveis) ────────────────────────────
@@ -75,10 +77,9 @@ const AppSidebar = ({ collapsed }: SidebarProps) => {
               to={item.path}
               title={collapsed ? item.label : undefined}
               className={`flex items-center gap-2.5 px-3 py-2 text-sm rounded-md transition-colors
-                ${
-                  active
-                    ? "bg-sidebar-accent text-sidebar-primary font-medium"
-                    : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                ${active
+                  ? "bg-sidebar-accent text-sidebar-primary font-medium"
+                  : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
                 }`}
             >
               <Icon className="h-4 w-4 shrink-0" />
