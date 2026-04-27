@@ -150,7 +150,7 @@ export async function sendMessage(ticketId: string, content: string, companyId: 
   }
 
   // 4. ATUALIZAÇÃO DO STATUS E DO KANBAN PARA "EM ATENDIMENTO"
-  if (ticket.status === 'waiting') {
+  if (ticket.status === 'waiting' || ticket.status === 'resolved') {
     // Busca o ID da coluna "Em Atendimento" (cor: attending)
     const { data: attendingCol } = await supabase
       .from('kanban_columns')
@@ -216,7 +216,7 @@ export async function sendMediaMessage(
   }
 
   // ATUALIZAÇÃO DO STATUS E DO KANBAN PARA "EM ATENDIMENTO" (Mídia)
-  if (ticket.status === 'waiting') {
+  if (ticket.status === 'waiting' || ticket.status === 'resolved') {
     const { data: attendingCol } = await supabase.from('kanban_columns').select('id').eq('company_id', companyId).eq('color', 'attending').maybeSingle();
     const updatePayload: any = { status: 'attending', updated_at: new Date().toISOString() };
     if (attendingCol) updatePayload.kanban_column_id = attendingCol.id;
@@ -263,4 +263,79 @@ export async function resolveTicket(ticketId: string, companyId: string): Promis
     .eq('id', ticketId);
 
   if (error) throw error;
+}
+
+export async function findOrCreateTicket(contactId: string, companyId: string): Promise<Ticket> {
+  // 1. Busca QUALQUER ticket desse contato (pegando o mais recente), independente do status!
+  const { data: existingTicket, error: searchError } = await supabase
+    .from('tickets')
+    .select('*')
+    .eq('contact_id', contactId)
+    .eq('company_id', companyId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (searchError) throw searchError;
+
+  if (existingTicket) {
+    // Se o ticket estava resolvido/finalizado, nós o "reabrimos" para aguardando
+    if (existingTicket.status === 'resolved') {
+      const { error: updateError } = await supabase
+        .from('tickets')
+        .update({
+          status: 'waiting',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existingTicket.id);
+
+      if (updateError) throw updateError;
+      existingTicket.status = 'waiting';
+    }
+
+    return existingTicket as unknown as Ticket;
+  }
+
+  // 2. Se realmente não existe NENHUM ticket na história desse contato, cria o primeiro
+  const { data: channels, error: channelError } = await supabase
+    .from('channels')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('status', 'connected')
+    .limit(1);
+
+  if (channelError) throw channelError;
+
+  if (!channels || channels.length === 0) {
+    const { data: anyChannels } = await supabase
+      .from('channels')
+      .select('id')
+      .eq('company_id', companyId)
+      .limit(1);
+
+    if (!anyChannels || anyChannels.length === 0) {
+      throw new Error('Nenhum canal encontrado. Cadastre um canal primeiro.');
+    }
+    channels.push(anyChannels[0]);
+  }
+
+  const defaultChannelId = channels[0].id;
+
+  const newTicket = {
+    company_id: companyId,
+    contact_id: contactId,
+    channel_id: defaultChannelId,
+    status: 'waiting',
+    unread_count: 0,
+  };
+
+  const { data: createdTicket, error: createError } = await supabase
+    .from('tickets')
+    .insert([newTicket])
+    .select('*')
+    .single();
+
+  if (createError) throw createError;
+
+  return createdTicket as unknown as Ticket;
 }

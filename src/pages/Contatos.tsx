@@ -5,9 +5,12 @@ import { Input } from "@/components/ui/input";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { getContacts, createContact, updateContact, deleteContact, ContactData } from "@/lib/api/contacts";
 import { getTags, assignTagToContact, removeTagFromContact, TagData } from "@/lib/api/tags";
+import { findOrCreateTicket } from "@/lib/api/tickets";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { format } from "date-fns";
+import { useNavigate } from "react-router-dom";
+import { MessageCircle } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -31,10 +34,11 @@ const Contatos = () => {
   const { company } = useAuth();
   const queryClient = useQueryClient();
   const companyId = company?.id;
+  const navigate = useNavigate();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingContact, setEditingContact] = useState<ContactData | null>(null);
-  
+
   // Form States
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -122,6 +126,26 @@ const Contatos = () => {
     }
   };
 
+  const handleIniciarAtendimento = async (contact: ContactData) => {
+    try {
+      console.log("Iniciando conversa com:", contact.name);
+
+      if (!companyId) {
+        toast.error("Erro: Empresa não identificada.");
+        return;
+      }
+
+      // 1. Cria ou busca o Ticket na API
+      const ticket = await findOrCreateTicket(contact.id, companyId);
+
+      // 2. Redireciona para a tela de atendimentos com o ticket ID
+      navigate(`/atendimentos?ticketId=${ticket.id}`);
+    } catch (error: any) {
+      console.error("Erro ao iniciar atendimento:", error);
+      toast.error(error.message || "Não foi possível iniciar o atendimento.");
+    }
+  };
+
   if (contactsLoading || tagsLoading) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -187,9 +211,9 @@ const Contatos = () => {
                       <div className="flex flex-wrap gap-1 max-w-[200px]">
                         {contactTags.length > 0 ? (
                           contactTags.map(tag => (
-                            <span 
+                            <span
                               key={tag.id}
-                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium text-white" 
+                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium text-white"
                               style={{ backgroundColor: tag.color }}
                             >
                               {tag.name}
@@ -207,6 +231,9 @@ const Contatos = () => {
                       </div>
                     </TableCell>
                     <TableCell className="text-right">
+                      <Button variant="ghost" size="sm" onClick={() => handleIniciarAtendimento(contact)} className="text-blue-500 hover:text-blue-700 hover:bg-blue-50" title="Iniciar Conversa">
+                        <MessageCircle className="h-4 w-4" />
+                      </Button>
                       <Button variant="ghost" size="sm" onClick={() => openModal(contact)}>
                         <Edit2 className="h-4 w-4" />
                       </Button>
@@ -242,23 +269,23 @@ const Contatos = () => {
               <Label htmlFor="email">E-mail</Label>
               <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email@exemplo.com" />
             </div>
-            
+
             {editingContact && (
               <div className="flex flex-col gap-2 p-3 bg-secondary/50 rounded-lg border border-border mt-2">
                 <div className="flex items-center gap-2 mb-2">
                   <TagIcon className="h-4 w-4 text-primary" />
                   <Label className="font-semibold text-primary">Tags do Contato</Label>
                 </div>
-                
+
                 <div className="flex flex-wrap gap-2 mb-3">
                   {extractTags(editingContact).map(tag => (
-                    <Badge 
-                      key={tag.id} 
+                    <Badge
+                      key={tag.id}
                       className="flex items-center gap-1 text-white hover:opacity-90 transition-opacity pr-1"
                       style={{ backgroundColor: tag.color }}
                     >
                       {tag.name}
-                      <button 
+                      <button
                         onClick={() => removeTagMutation.mutate({ contactId: editingContact.id, tagId: tag.id })}
                         className="ml-1 rounded-full p-0.5 hover:bg-black/20"
                       >
@@ -288,7 +315,7 @@ const Contatos = () => {
                 </Select>
               </div>
             )}
-            
+
             <div className="flex flex-col gap-2">
               <Label htmlFor="notes">Anotações Internas</Label>
               <Input id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Observações..." />

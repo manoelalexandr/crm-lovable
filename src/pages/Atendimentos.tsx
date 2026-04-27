@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { getTickets, getTicketMessages, sendMessage, sendMediaMessage, resolveTicket, Ticket, Message } from "@/lib/api/tickets";
 import { getQuickResponses, QuickResponse } from "@/lib/api/quickResponses";
@@ -67,6 +68,58 @@ const Atendimentos = () => {
   const filteredQuickReplies = quickReplyFilter
     ? quickResponses.filter((r) => r.shortcut.startsWith(quickReplyFilter))
     : quickResponses;
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const ticketIdFromUrl = searchParams.get("ticketId");
+
+  useEffect(() => {
+    const fetchAndOpenTicket = async () => {
+      if (!ticketIdFromUrl || !companyId) return;
+
+      try {
+        // 1. Em vez de procurar só na aba atual, busca o ticket direto no banco
+        const { data: ticket, error } = await supabase
+          .from('tickets')
+          .select(`
+            *,
+            contacts (
+              id,
+              name,
+              phone,
+              avatar_url
+            )
+          `)
+          .eq('id', ticketIdFromUrl)
+          .eq('company_id', companyId)
+          .single();
+
+        if (error || !ticket) return;
+
+        // 2. Descobre em qual aba ele deveria estar baseado no status
+        let targetTab: "aguardando" | "atendendo" | "grupos" = "atendendo";
+        if (ticket.status === 'waiting' || ticket.status === 'pending') {
+          targetTab = "aguardando";
+        }
+
+        // 3. Muda para a aba correta (se já não estiver nela)
+        if (activeTab !== targetTab) {
+          setActiveTab(targetTab);
+        }
+
+        // 4. Abre a conversa selecionando o ticket
+        setSelectedTicket(ticket as unknown as Ticket);
+
+        // 5. Limpa a URL
+        searchParams.delete("ticketId");
+        setSearchParams(searchParams, { replace: true });
+
+      } catch (err) {
+        console.error("Erro ao abrir ticket da URL:", err);
+      }
+    };
+
+    fetchAndOpenTicket();
+  }, [ticketIdFromUrl, companyId]);
 
   // Realtime subscription
   useEffect(() => {
