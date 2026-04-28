@@ -1,14 +1,21 @@
-import { useState, useRef } from "react";
-import { CheckCircle2, Eye, Clock, Zap, Paperclip, Send, MoreVertical, MessageSquare, Search, Smartphone, Instagram, Loader2 } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import {
+  CheckCircle2, Eye, Clock, Zap, Paperclip, Send,
+  MoreVertical, MessageSquare, Search, Smartphone,
+  Instagram, Loader2, DownloadCloud, ArrowLeft
+} from "lucide-react"; // <-- ArrowLeft adicionado aqui!
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
-import { useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
+import {
+  getTickets, getTicketMessages, sendMessage,
+  sendMediaMessage, resolveTicket, importChatHistory,
+  syncContactAvatar, Ticket, Message
+} from "@/lib/api/tickets";
 
-import { getTickets, getTicketMessages, sendMessage, sendMediaMessage, resolveTicket, Ticket, Message } from "@/lib/api/tickets";
 import { getQuickResponses, QuickResponse } from "@/lib/api/quickResponses";
 import { useAuth } from "@/contexts/AuthContext";
 import { format, isToday, isYesterday } from "date-fns";
@@ -39,6 +46,7 @@ const Atendimentos = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [showQuickReplies, setShowQuickReplies] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const companyId = company?.id;
 
@@ -77,7 +85,6 @@ const Atendimentos = () => {
       if (!ticketIdFromUrl || !companyId) return;
 
       try {
-        // 1. Em vez de procurar só na aba atual, busca o ticket direto no banco
         const { data: ticket, error } = await supabase
           .from('tickets')
           .select(`
@@ -95,21 +102,17 @@ const Atendimentos = () => {
 
         if (error || !ticket) return;
 
-        // 2. Descobre em qual aba ele deveria estar baseado no status
         let targetTab: "aguardando" | "atendendo" | "grupos" = "atendendo";
         if (ticket.status === 'waiting' || ticket.status === 'pending') {
           targetTab = "aguardando";
         }
 
-        // 3. Muda para a aba correta (se já não estiver nela)
         if (activeTab !== targetTab) {
           setActiveTab(targetTab);
         }
 
-        // 4. Abre a conversa selecionando o ticket
         setSelectedTicket(ticket as unknown as Ticket);
 
-        // 5. Limpa a URL
         searchParams.delete("ticketId");
         setSearchParams(searchParams, { replace: true });
 
@@ -136,10 +139,7 @@ const Atendimentos = () => {
           filter: `company_id=eq.${companyId}`,
         },
         (payload) => {
-          // Invalida tickets para atualizar contadores e última mensagem
           queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
-
-          // Se for uma nova mensagem para o ticket aberto, atualiza mensagens
           const newMessage = payload.new as { ticket_id: string };
           if (newMessage && newMessage.ticket_id === selectedTicket?.id) {
             queryClient.invalidateQueries({ queryKey: ["messages", selectedTicket.id] });
@@ -155,10 +155,7 @@ const Atendimentos = () => {
           filter: `company_id=eq.${companyId}`,
         },
         (payload) => {
-          // Invalida lista de tickets para refletir mudanças de status ou atribuição
           queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
-
-          // Se o ticket selecionado foi o que mudou, atualiza seus dados sem perder os campos joinados (contacts)
           const updatedTicket = payload.new as Ticket;
           if (updatedTicket && updatedTicket.id === selectedTicket?.id) {
             setSelectedTicket(prev => prev ? { ...prev, ...updatedTicket, contacts: prev.contacts } : null);
@@ -172,7 +169,18 @@ const Atendimentos = () => {
     };
   }, [companyId, selectedTicket?.id, queryClient]);
 
-  // Mutation para enviar mensagem
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  useEffect(() => {
+    if (selectedTicket && !selectedTicket.contacts?.avatar_url) {
+      syncContactAvatar(selectedTicket.id, selectedTicket.contact_id).then(() => {
+        queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
+      });
+    }
+  }, [selectedTicket?.id]);
+
   const sendMessageMutation = useMutation({
     mutationFn: (content: string) => sendMessage(selectedTicket!.id, content, companyId!, user!.id),
     onSuccess: () => {
@@ -186,17 +194,26 @@ const Atendimentos = () => {
     }
   });
 
-  // Mutation para finalizar atendimento
   const resolveTicketMutation = useMutation({
-    mutationFn: () => resolveTicket(selectedTicket!.id, companyId!), // <--- Adicionado companyId! aqui
+    mutationFn: () => resolveTicket(selectedTicket!.id, companyId!),
     onSuccess: () => {
       toast.success("Atendimento finalizado!");
       setSelectedTicket(null);
       queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
-      // Invalida o Kanban também para forçar a atualização visual em tempo real
       queryClient.invalidateQueries({ queryKey: ["kanban", companyId] });
     },
     onError: () => toast.error("Erro ao finalizar atendimento."),
+  });
+
+  const importHistoryMutation = useMutation({
+    mutationFn: () => importChatHistory(selectedTicket!.id, companyId!, user!.id),
+    onSuccess: (count) => {
+      toast.success(`${count} mensagens importadas com sucesso!`);
+      queryClient.invalidateQueries({ queryKey: ["messages", selectedTicket!.id] });
+    },
+    onError: (error: any) => {
+      toast.error(error.message || "Erro ao importar histórico.");
+    }
   });
 
   const sendMediaMutation = useMutation({
@@ -246,7 +263,6 @@ const Atendimentos = () => {
   const handleMessageInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setMessageInput(val);
-    // Abre o popover de respostas rápidas automaticamente ao digitar "/"
     setShowQuickReplies(val.startsWith("/"));
   };
 
@@ -262,9 +278,10 @@ const Atendimentos = () => {
   ];
 
   return (
-    <div className="flex h-[calc(100vh-3rem)]">
-      {/* Left Panel - Ticket List */}
-      <div className="w-80 border-r border-border bg-card flex flex-col shrink-0">
+    <div className="flex h-[calc(100vh-3rem)] w-full overflow-hidden">
+
+      {/* 1. LISTA DE TICKETS: Fica invisível no celular se houver um ticket selecionado */}
+      <div className={`${selectedTicket ? 'hidden md:flex' : 'flex'} w-full md:w-80 flex-col border-r border-border bg-card shrink-0 h-full`}>
         {/* Search */}
         <div className="p-3 border-b border-border">
           <div className="relative">
@@ -318,9 +335,13 @@ const Atendimentos = () => {
                 className={`flex items-start gap-3 p-3 border-b border-border cursor-pointer transition-colors
                       ${selectedTicket?.id === ticket.id ? "bg-sidebar-accent" : "hover:bg-secondary/50"}`}
               >
-                <div className="h-9 w-9 rounded-full bg-muted flex items-center justify-center shrink-0 text-sm font-medium text-muted-foreground">
-                  {contactName.charAt(0).toUpperCase()}
-                </div>
+                {ticket.contacts?.avatar_url ? (
+                  <img src={ticket.contacts.avatar_url} alt="Avatar" className="h-9 w-9 rounded-full object-cover shrink-0 border border-border" />
+                ) : (
+                  <div className="h-9 w-9 rounded-full bg-muted flex items-center justify-center shrink-0 text-sm font-medium text-muted-foreground">
+                    {contactName.charAt(0).toUpperCase()}
+                  </div>
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-medium truncate">{contactName}</span>
@@ -349,25 +370,54 @@ const Atendimentos = () => {
         </div>
       </div>
 
-      {/* Right Panel - Chat */}
+      {/* 2. ÁREA DE CHAT: Fica com flex-1 total e tem o botão de voltar no mobile */}
       {selectedTicket ? (
-        <div className="flex-1 flex flex-col bg-card">
+        <div className={`${selectedTicket ? 'flex' : 'hidden md:flex'} flex-1 flex-col bg-card overflow-hidden h-full min-w-0`}>
+
           {/* Chat Header */}
-          <div className="h-14 border-b border-border flex items-center justify-between px-4 bg-card shrink-0 z-10">
-            <div className="flex items-center gap-3">
-              <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center text-sm font-bold text-slate-400 border border-slate-200">
-                {(selectedTicket.contacts?.name || 'D').charAt(0).toUpperCase()}
-              </div>
-              <div>
-                <p className="text-sm font-bold truncate max-w-[200px]">{selectedTicket.contacts?.name || 'Cliente Desconhecido'}</p>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-muted-foreground capitalize">{selectedTicket.source || 'whatsapp'}</span>
-                  <span className="text-[10px] text-muted-foreground">•</span>
-                  <span className="text-[10px] text-muted-foreground">#{selectedTicket.id.slice(0, 5).toUpperCase()}</span>
+          <div className="h-14 border-b border-border flex items-center justify-between px-4 bg-card shrink-0 z-10 w-full overflow-hidden">
+            <div className="flex items-center gap-2 md:gap-3 flex-1 min-w-0 pr-2">
+
+              {/* BOTÃO VOLTAR (Só aparece no mobile) */}
+              <button
+                className="md:hidden p-1.5 -ml-2 mr-1 text-muted-foreground hover:bg-muted rounded-md"
+                onClick={() => setSelectedTicket(null)}
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </button>
+
+              {selectedTicket.contacts?.avatar_url ? (
+                <img src={selectedTicket.contacts.avatar_url} alt="Avatar" className="h-8 w-8 rounded-full object-cover shrink-0 border border-slate-200" />
+              ) : (
+                <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center shrink-0 text-sm font-bold text-slate-400 border border-slate-200">
+                  {(selectedTicket.contacts?.name || 'D').charAt(0).toUpperCase()}
+                </div>
+              )}
+
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold truncate">{selectedTicket.contacts?.name || 'Cliente Desconhecido'}</p>
+                <div className="flex items-center gap-2 truncate">
+                  <span className="text-[10px] text-muted-foreground capitalize shrink-0">{selectedTicket.source || 'whatsapp'}</span>
+                  <span className="text-[10px] text-muted-foreground shrink-0">•</span>
+                  <span className="text-[10px] text-muted-foreground shrink-0">#{selectedTicket.id.slice(0, 5).toUpperCase()}</span>
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-1">
+
+            <div className="flex items-center gap-1 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs gap-1.5 text-blue-600 border-blue-500/50 hover:bg-blue-500/10 hover:text-blue-700"
+                onClick={() => importHistoryMutation.mutate()}
+                disabled={importHistoryMutation.isPending}
+                title="Puxar últimas mensagens do celular"
+              >
+                {importHistoryMutation.isPending
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                  : <DownloadCloud className="h-3.5 w-3.5 shrink-0" />}
+                <span className="hidden sm:inline">Importar Histórico</span>
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -377,11 +427,11 @@ const Atendimentos = () => {
                 title="Finalizar este atendimento"
               >
                 {resolveTicketMutation.isPending
-                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  : <CheckCircle2 className="h-3.5 w-3.5" />}
-                Finalizar
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                  : <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />}
+                <span className="hidden sm:inline">Finalizar</span>
               </Button>
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground" title="Mais opções">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground shrink-0" title="Mais opções">
                 <MoreVertical className="h-4 w-4" />
               </Button>
             </div>
@@ -459,11 +509,11 @@ const Atendimentos = () => {
                     </div>
                   ))
                 )}
+                <div ref={messagesEndRef} />
               </div>
 
               {/* Chat Input */}
-              <div className="border-t border-border p-3 bg-card">
-                {/* Popover de Respostas Rápidas */}
+              <div className="border-t border-border p-3 bg-card shrink-0">
                 {showQuickReplies && filteredQuickReplies.length > 0 && (
                   <div className="mb-2 bg-card border border-border rounded-lg shadow-lg overflow-hidden max-h-48 overflow-y-auto">
                     <div className="px-3 py-1.5 border-b border-border bg-secondary/40 flex items-center gap-1.5">
@@ -484,7 +534,6 @@ const Atendimentos = () => {
                     ))}
                   </div>
                 )}
-                {/* Aviso quando digita "/" mas não há correspondências */}
                 {showQuickReplies && filteredQuickReplies.length === 0 && quickResponses.length === 0 && (
                   <div className="mb-2 px-3 py-2 bg-secondary/30 border border-border rounded-lg">
                     <p className="text-xs text-muted-foreground">Nenhuma resposta rápida cadastrada. <a href="/respostas-rapidas" className="text-primary underline">Criar agora →</a></p>
@@ -526,7 +575,7 @@ const Atendimentos = () => {
                     <Zap className="h-4 w-4" />
                   </Button>
                   <Input
-                    placeholder="Digite uma mensagem ou / para respostas rápidas..."
+                    placeholder="Mensagem ou / para respostas..."
                     value={messageInput}
                     onChange={handleMessageInputChange}
                     onKeyDown={e => {
@@ -562,11 +611,15 @@ const Atendimentos = () => {
             </div>
 
             {/* Contact Sidebar */}
-            <div className="w-64 border-l border-border bg-card hidden xl:flex flex-col overflow-y-auto">
+            <div className="w-64 shrink-0 border-l border-border bg-card hidden xl:flex flex-col overflow-y-auto">
               <div className="p-4 flex flex-col items-center">
-                <div className="h-20 w-20 rounded-full bg-slate-100 flex items-center justify-center text-2xl font-bold text-slate-400 mb-3 border-2 border-slate-200">
-                  {(selectedTicket.contacts?.name || 'D').charAt(0).toUpperCase()}
-                </div>
+                {selectedTicket.contacts?.avatar_url ? (
+                  <img src={selectedTicket.contacts.avatar_url} alt="Avatar" className="h-20 w-20 rounded-full object-cover shrink-0 mb-3 border-2 border-slate-200 shadow-sm" />
+                ) : (
+                  <div className="h-20 w-20 rounded-full bg-slate-100 flex items-center justify-center text-2xl font-bold text-slate-400 mb-3 border-2 border-slate-200">
+                    {(selectedTicket.contacts?.name || 'D').charAt(0).toUpperCase()}
+                  </div>
+                )}
                 <h3 className="font-bold text-center text-sm">{selectedTicket.contacts?.name || 'Cliente Desconhecido'}</h3>
                 <p className="text-xs text-muted-foreground">{selectedTicket.contacts?.phone}</p>
 
@@ -604,7 +657,8 @@ const Atendimentos = () => {
           </div>
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center bg-secondary/20">
+        // 3. ESTADO VAZIO: Também fica invisível no celular para dar espaço à lista
+        <div className="hidden md:flex flex-1 items-center justify-center bg-secondary/20">
           <div className="text-center">
             <h2 className="text-2xl font-bold text-primary tracking-tight">TRIP<span className="text-foreground/40">.ia</span></h2>
             <p className="text-sm text-muted-foreground mt-2">Selecione um ticket para começar a conversar</p>

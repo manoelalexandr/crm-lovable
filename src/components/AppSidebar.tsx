@@ -8,6 +8,7 @@ import {
   Plug,
   Zap,
   Shield,
+  MessageSquare,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -18,6 +19,7 @@ interface SidebarProps {
 const activeMenuItems = [
   { label: "Dashboard", icon: LayoutDashboard, path: "/dashboard" },
   { label: "Atendimentos", icon: Headphones, path: "/atendimentos" },
+  { label: "Chat Interno", icon: MessageSquare, path: "/chat-interno" },
   { label: "Respostas Rápidas", icon: Zap, path: "/respostas-rapidas" },
   { label: "Kanban", icon: SquareKanban, path: "/kanban" },
   { label: "Contatos", icon: Users, path: "/contatos" },
@@ -30,7 +32,6 @@ const activeMenuItems = [
 // { label: "Relatórios",        icon: BarChart3,    path: "/relatorios" }
 // { label: "Painel",            icon: Monitor,      path: "/painel" }
 // { label: "Agendamentos",      icon: CalendarClock,path: "/agendamentos" }
-// { label: "Chat Interno",      icon: MessageSquare,path: "/chat-interno" }
 // { label: "Campanhas",         icon: Megaphone,    path: "/campanhas" }
 // { label: "Flowbuilder",       icon: GitBranch,    path: "/flowbuilder" }
 // { label: "Informativos",      icon: FileText,     path: "/informativos" }

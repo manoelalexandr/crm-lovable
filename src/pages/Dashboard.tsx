@@ -2,11 +2,14 @@ import {
   Phone, Users, CheckCircle, UsersRound, UserPlus, Mail,
   MessageSquare, Clock, Timer, ArrowDown, ArrowUp, LucideIcon
 } from "lucide-react";
+import { useEffect } from "react";
+import { supabase } from "@/lib/supabase";
 import { Card, CardContent } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getDashboardData } from "@/lib/api/dashboard";
+import { useAuth } from "@/contexts/AuthContext";
+
 
 // Mapeamento de strings para componentes de ícone do Lucide
 const iconMap: Record<string, LucideIcon> = {
@@ -27,25 +30,45 @@ const MetricSkeleton = () => (
   </Card>
 );
 
-const NpsSkeleton = () => (
-  <div className="flex items-center gap-3">
-    <Skeleton className="h-4 w-24 shrink-0" />
-    <Skeleton className="flex-1 h-2" />
-    <Skeleton className="h-4 w-8" />
-  </div>
-);
-
-import { useAuth } from "@/contexts/AuthContext";
-
 const Dashboard = () => {
   const { user } = useAuth();
   const companyId = user?.app_metadata?.company_id;
+  const queryClient = useQueryClient(); // <-- Instancia o cliente
+
+  // --- NOVO BLOCO: OUVINTE REALTIME INSTANTÂNEO ---
+  useEffect(() => {
+    if (!companyId) return;
+
+    const channel = supabase
+      .channel('dashboard_realtime')
+      // Fica ouvindo mudanças de Status Online/Offline dos atendentes
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'company_users', filter: `company_id=eq.${companyId}` },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ["dashboard", companyId] });
+        }
+      )
+      // Opcional, mas incrível: Ouve mudanças em tickets para atualizar as métricas na hora!
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tickets', filter: `company_id=eq.${companyId}` },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ["dashboard", companyId] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [companyId, queryClient]);
+
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ["dashboard", companyId],
     queryFn: () => getDashboardData(companyId),
     enabled: !!companyId,
-    staleTime: 60_000, // Cache por 1 minuto antes de revalidar
   });
 
   return (
@@ -57,8 +80,8 @@ const Dashboard = () => {
           {isLoading
             ? Array.from({ length: 12 }).map((_, i) => <MetricSkeleton key={i} />)
             : isError
-            ? <p className="text-sm text-destructive col-span-full">Erro ao carregar indicadores.</p>
-            : data?.metrics.map((m, i) => {
+              ? <p className="text-sm text-destructive col-span-full">Erro ao carregar indicadores.</p>
+              : data?.metrics.map((m, i) => {
                 const Icon = iconMap[m.icon];
                 return (
                   <Card key={i} className="shadow-sm">
@@ -75,24 +98,6 @@ const Dashboard = () => {
         </div>
       </div>
 
-      {/* Pesquisa de satisfação (NPS) */}
-      <div>
-        <h2 className="text-lg font-bold text-primary mb-4">Pesquisa de satisfação</h2>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {isLoading
-            ? Array.from({ length: 4 }).map((_, i) => <NpsSkeleton key={i} />)
-            : isError
-            ? <p className="text-sm text-destructive col-span-full">Erro ao carregar dados de NPS.</p>
-            : data?.nps.map(item => (
-                <div key={item.label} className="flex items-center gap-3">
-                  <span className="text-sm font-medium w-24 shrink-0">{item.label}</span>
-                  <Progress value={item.value} className="flex-1 h-2" />
-                  <span className="text-sm font-medium w-10 text-right">{item.value}%</span>
-                </div>
-              ))}
-        </div>
-      </div>
-
       {/* Atendimentos */}
       <div>
         <h2 className="text-lg font-bold text-primary mb-4">Atendimentos</h2>
@@ -100,31 +105,22 @@ const Dashboard = () => {
           {isLoading
             ? Array.from({ length: 4 }).map((_, i) => <MetricSkeleton key={i} />)
             : [
-                { icon: Phone, value: data?.metrics[0]?.value ?? "0", label: "Total de Atendimentos" },
-                { icon: Users, value: "0", label: "Aguardando avaliação" },
-                { icon: Users, value: "0", label: "Sem avaliação" },
-                { icon: Users, value: "0", label: "Avaliados" },
-              ].map((m, i) => (
-                <Card key={i} className="shadow-sm">
-                  <CardContent className="p-4 flex items-center gap-3">
-                    <m.icon className="h-5 w-5 text-primary shrink-0" />
-                    <div>
-                      <p className="text-lg font-bold">{m.value}</p>
-                      <p className="text-xs text-muted-foreground">{m.label}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+              { icon: Phone, value: data?.metrics[0]?.value ?? "0", label: "Total de Atendimentos" },
+              { icon: Users, value: "0", label: "Aguardando avaliação" },
+              { icon: Users, value: "0", label: "Sem avaliação" },
+              { icon: Users, value: "0", label: "Avaliados" },
+            ].map((m, i) => (
+              <Card key={i} className="shadow-sm">
+                <CardContent className="p-4 flex items-center gap-3">
+                  <m.icon className="h-5 w-5 text-primary shrink-0" />
+                  <div>
+                    <p className="text-lg font-bold">{m.value}</p>
+                    <p className="text-xs text-muted-foreground">{m.label}</p>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
         </div>
-      </div>
-
-      {/* Índice de avaliação */}
-      <div>
-        <h2 className="text-lg font-bold text-primary mb-4">Índice de avaliação</h2>
-        {isLoading
-          ? <Skeleton className="h-7 w-12" />
-          : <span className="inline-block bg-primary text-primary-foreground text-sm font-bold rounded px-3 py-1">0%</span>
-        }
       </div>
 
       {/* Atendentes */}

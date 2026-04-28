@@ -339,3 +339,166 @@ export async function findOrCreateTicket(contactId: string, companyId: string): 
 
   return createdTicket as unknown as Ticket;
 }
+
+export async function importChatHistory(ticketId: string, companyId: string, agentId: string) {
+  // 1. Busca os dados do ticket, canal e contato
+  const { data: ticket, error: ticketError } = await supabase
+    .from('tickets')
+    .select(`
+      *,
+      contacts!inner (phone),
+      channels!inner (type, evolution_instance_name, evolution_api_url, evolution_api_key)
+    `)
+    .eq('id', ticketId)
+    .single();
+
+  if (ticketError) throw new Error('Ticket não encontrado.');
+
+  const contactPhone = (ticket.contacts as any)?.phone;
+  const channel = (ticket.channels as any);
+
+  if (channel?.type !== 'whatsapp' || !channel.evolution_instance_name || !contactPhone) {
+    throw new Error('Canal não configurado ou contato sem telefone válido.');
+  }
+
+  // 2. Prepara os dados para a Evolution API
+  const remoteJid = `${contactPhone.replace(/\D/g, '')}@s.whatsapp.net`;
+
+  try {
+    // 3. Faz a requisição para a Evolution API puxar o histórico
+    const response = await fetch(`${channel.evolution_api_url}/chat/findMessages/${channel.evolution_instance_name}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': channel.evolution_api_key
+      },
+      body: JSON.stringify({
+        where: {
+          key: { remoteJid: remoteJid }
+        },
+        limit: 100
+      })
+    });
+
+    // --- ESTA É A PARTE NOVA E ROBUSTA QUE ADICIONAMOS ---
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      console.error("Erro HTTP da Evolution:", errData);
+      throw new Error(errData.response?.message || errData.message || 'Falha ao conectar com a Evolution API');
+    }
+
+    const data = await response.json();
+    console.log("🕵️ Resposta da Evolution API:", data);
+
+    let messagesToImport = [];
+
+    if (Array.isArray(data)) {
+      messagesToImport = data;
+    } else if (data.messages && Array.isArray(data.messages)) {
+      messagesToImport = data.messages;
+    } else if (data.messages?.records && Array.isArray(data.messages.records)) {
+      messagesToImport = data.messages.records;
+    } else if (data.records && Array.isArray(data.records)) {
+      messagesToImport = data.records;
+    } else {
+      throw new Error(data.error || data.message || "A API não retornou uma lista de mensagens válida.");
+    }
+    // --- FIM DA PARTE NOVA ---
+
+    if (messagesToImport.length === 0) {
+      return 0; // Nenhuma mensagem nova para importar
+    }
+
+    // 4. Mapeia as mensagens
+    const formattedMessages = messagesToImport.map((msg: any) => {
+      const isFromMe = msg.key.fromMe;
+
+      let content = '';
+      if (msg.message?.conversation) content = msg.message.conversation;
+      else if (msg.message?.extendedTextMessage?.text) content = msg.message.extendedTextMessage.text;
+      else if (msg.message?.imageMessage?.caption) content = msg.message.imageMessage.caption;
+      else content = '[Mensagem de Mídia/Sistema]';
+
+      // Tratamento extra de segurança para o timestamp
+      let messageDate = new Date();
+      if (msg.messageTimestamp) {
+        // Se for string ou numero em segundos
+        const ts = typeof msg.messageTimestamp === 'string' ? parseInt(msg.messageTimestamp) : msg.messageTimestamp;
+        // Evolution costuma mandar em segundos, multiplicamos por 1000 para ms
+        messageDate = new Date(ts > 1000000000000 ? ts : ts * 1000);
+      }
+
+      return {
+        ticket_id: ticketId,
+        company_id: companyId,
+        sender_type: isFromMe ? 'agent' : 'client',
+        sender_id: isFromMe ? agentId : null,
+        content: content,
+        type: msg.message?.imageMessage ? 'image' : msg.message?.audioMessage ? 'audio' : 'text',
+        status: 'sent',
+        created_at: messageDate.toISOString()
+      };
+    });
+
+    // 5. Salva no Supabase
+    const { error: insertError } = await supabase
+      .from('messages')
+      .insert(formattedMessages.reverse());
+
+    if (insertError) throw insertError;
+
+    return formattedMessages.length;
+
+  } catch (error: any) {
+    console.error('Erro na importação:', error);
+    throw new Error(error.message || 'Não foi possível importar as mensagens do aparelho.');
+  }
+}
+
+export async function syncContactAvatar(ticketId: string, contactId: string) {
+  // 1. Busca os dados do canal e o telefone do contato
+  const { data: ticket, error } = await supabase
+    .from('tickets')
+    .select(`
+      contacts!inner (phone, avatar_url),
+      channels!inner (type, evolution_instance_name, evolution_api_url, evolution_api_key)
+    `)
+    .eq('id', ticketId)
+    .single();
+
+  if (error || !ticket) return;
+
+  const contactData = ticket.contacts as any;
+  const channelData = ticket.channels as any;
+
+  // Se já tem foto, ou se falta alguma configuração do canal, encerra aqui
+  if (contactData.avatar_url || !channelData.evolution_instance_name || !contactData.phone) {
+    return;
+  }
+
+  try {
+    // 2. Pede a foto para a Evolution API
+    const response = await fetch(`${channelData.evolution_api_url}/chat/fetchProfilePictureUrl/${channelData.evolution_instance_name}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': channelData.evolution_api_key
+      },
+      body: JSON.stringify({
+        number: contactData.phone.replace(/\D/g, '') // Envia só os números
+      })
+    });
+
+    const data = await response.json();
+
+    // 3. Se a API retornou uma URL válida, salva no Supabase!
+    if (data && data.profilePictureUrl) {
+      await supabase
+        .from('contacts')
+        .update({ avatar_url: data.profilePictureUrl })
+        .eq('id', contactId);
+    }
+  } catch (error) {
+    console.error('Erro ao buscar foto de perfil na Evolution:', error);
+  }
+}

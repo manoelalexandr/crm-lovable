@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
 import type { Tables } from '@/lib/database.types';
@@ -26,6 +26,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [company, setCompany] = useState<Company | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  const lastFetchedRef = useRef({ userId: '', companyId: '' });
+
+  // --- NOVA FUNÇÃO: Atualiza o status de Online/Offline no Banco ---
+  const setOnlineStatus = async (userId: string, isOnline: boolean) => {
+    try {
+      await supabase
+        .from('company_users')
+        .update({ status: isOnline ? 'online' : 'offline' })
+        .eq('user_id', userId);
+    } catch (err) {
+      console.error('[Auth] Erro ao atualizar status online:', err);
+    }
+  };
+
   const loadCompanyData = async (userId: string, companyId?: string) => {
     try {
       if (!companyId) {
@@ -34,17 +48,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      console.log('[Auth] Iniciando busca no SDK do Supabase para user_id:', userId, 'companyId:', companyId);
-
       const { data: userProfile, error: e1 } = await supabase
         .from('company_users')
         .select('*')
         .eq('user_id', userId)
         .eq('company_id', companyId)
         .single();
-        
+
       if (e1) console.error('[Auth] Erro no SDK (userProfile):', e1);
-      console.log('[Auth] userProfile retornado.');
 
       const { data: companyData, error: e2 } = await supabase
         .from('companies')
@@ -53,7 +64,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .single();
 
       if (e2) console.error('[Auth] Erro no SDK (companyData):', e2);
-      console.log('[Auth] companyData retornado.');
 
       setCompanyUser(userProfile as CompanyUser | null);
       setCompany(companyData as Company | null);
@@ -68,10 +78,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const { data, error } = await supabase.auth.refreshSession();
       if (error) throw error;
-      
+
       const session = data?.session;
       if (session?.user) {
         const companyId = session.user.app_metadata?.company_id;
+        lastFetchedRef.current = { userId: '', companyId: '' };
         await loadCompanyData(session.user.id, companyId);
       }
     } catch (err) {
@@ -81,49 +92,66 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let isMounted = true;
-    console.log('[Auth] Gerenciador de Autenticação iniciado.');
 
-    // Timeout de segurança: Se em 7 segundos nada acontecer, libera o carregamento
     const safetyTimeout = setTimeout(() => {
       if (isMounted && isLoading) {
-        console.warn('[Auth] Timeout de segurança atingido. Liberando UI.');
         setIsLoading(false);
       }
     }, 7000);
 
-    // Inscrição no evento de mudança de estado, SEM AWAIT para evitar Deadlock no cliente do Supabase
+    // --- NOVO: Fica de olho se o usuário fechar a aba do navegador ---
+    const handleBeforeUnload = () => {
+      const currentUserId = lastFetchedRef.current.userId;
+      if (currentUserId) {
+        // Dispara a requisição para ficar offline sem esperar (para não travar o fechamento da aba)
+        supabase.from('company_users').update({ status: 'offline' }).eq('user_id', currentUserId).then();
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, currentSession) => {
-      console.log(`[Auth] Evento recebido: ${event}`);
-      
       if (!isMounted) return;
 
-      // Sincroniza usuário e sessão de forma síncrona
       setSession(currentSession);
       setUser(currentSession?.user ?? null);
-      
+
       if (currentSession?.user) {
         const companyId = currentSession.user.app_metadata?.company_id;
-        console.log(`[Auth] Usuário logado: ${currentSession.user.email}. Empresa no JWT: ${companyId || 'Nenhuma'}`);
-        
-        if (companyId) {
-          // Chama a busca sem bloquear a thread do Auth do Supabase! (Evita Hang)
-          loadCompanyData(currentSession.user.id, companyId).then(() => {
-             if (isMounted) {
-               setIsLoading(false);
-               clearTimeout(safetyTimeout);
-             }
+        const userId = currentSession.user.id;
+
+        if (lastFetchedRef.current.userId !== userId || lastFetchedRef.current.companyId !== companyId) {
+
+          // Se tinha alguém logado antes na mesma máquina, desloga ele primeiro
+          if (lastFetchedRef.current.userId && lastFetchedRef.current.userId !== userId) {
+            setOnlineStatus(lastFetchedRef.current.userId, false);
+          }
+
+          lastFetchedRef.current = { userId, companyId: companyId || '' };
+
+          loadCompanyData(userId, companyId).then(() => {
+            // MARCA COMO ONLINE ASSIM QUE CARREGAR OS DADOS
+            setOnlineStatus(userId, true);
+            if (isMounted) {
+              setIsLoading(false);
+              clearTimeout(safetyTimeout);
+            }
           });
         } else {
-          setCompanyUser(null);
-          setCompany(null);
-          setIsLoading(false);
-          clearTimeout(safetyTimeout);
+          if (isMounted) {
+            setIsLoading(false);
+            clearTimeout(safetyTimeout);
+          }
         }
       } else {
+        // MARCA COMO OFFLINE QUANDO A SESSÃO ACABAR/DESLOGAR
+        if (lastFetchedRef.current.userId) {
+          setOnlineStatus(lastFetchedRef.current.userId, false);
+        }
         setCompanyUser(null);
         setCompany(null);
         setIsLoading(false);
         clearTimeout(safetyTimeout);
+        lastFetchedRef.current = { userId: '', companyId: '' };
       }
     });
 
@@ -131,10 +159,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isMounted = false;
       clearTimeout(safetyTimeout);
       subscription.unsubscribe();
+      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, []);
 
   const signOut = async () => {
+    if (user?.id) {
+      await setOnlineStatus(user?.id, false); // Força offline antes de destruir a sessão
+    }
     await supabase.auth.signOut();
   };
 

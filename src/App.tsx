@@ -14,6 +14,7 @@ import Tags from "./pages/Tags";
 import RespostasRapidas from "./pages/RespostasRapidas";
 import Conexoes from "./pages/Conexoes";
 import Equipe from "./pages/Equipes";
+import ChatInterno from "./pages/ChatInterno";
 import NotFound from "./pages/NotFound";
 import { AuthProvider } from "./contexts/AuthContext";
 import { ProtectedRoute } from "./components/ProtectedRoute";
@@ -47,7 +48,8 @@ const App = () => (
                 <Route path="tags" element={<Tags />} />
                 <Route path="respostas-rapidas" element={<RespostasRapidas />} />
                 <Route path="conexoes" element={<Conexoes />} />
-                <Route path="equipe" element={<Equipe />} /> {/* <-- 2. Adicione a rota aqui */}
+                <Route path="equipe" element={<Equipe />} />
+                <Route path="chat-interno" element={<ChatInterno />} />
               </Route>
             </Route>
 
