@@ -211,7 +211,7 @@ export default function ChatInterno() {
                                 }
                             }}
                             className="h-10"
-                            disabled={sendMessageMutation.isPending}
+                            autoFocus
                         />
                         <Button
                             size="icon"
@@ -222,7 +222,6 @@ export default function ChatInterno() {
                             {sendMessageMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                         </Button>
                     </div>
-
                 </div>
             ) : (
                 <div className="hidden md:flex flex-1 items-center justify-center bg-secondary/10 flex-col gap-3">
