@@ -18,8 +18,13 @@ export interface ContactWithTags extends ContactData {
   contact_tags?: { tags: any }[];
 }
 
-export async function getContacts(companyId: string) {
-  const { data, error } = await supabase
+export const getContacts = async (
+  companyId: string,
+  userId?: string,     // <-- Novo argumento
+  userRole?: string    // <-- Novo argumento
+) => {
+  // 1. Inicia a busca base dos contactos e das suas respetivas tags
+  let query = supabase
     .from('contacts')
     .select(`
       *,
@@ -27,12 +32,26 @@ export async function getContacts(companyId: string) {
         tags (*)
       )
     `)
-    .eq('company_id', companyId)
-    .order('created_at', { ascending: false });
+    .eq('company_id', companyId);
 
-  if (error) throw error;
-  return data as ContactWithTags[];
-}
+  // 2. A "CERCA": Filtro de Carteirização na lista de contactos
+  // Se o utilizador for um atendente (agent), só vê os seus clientes ou os que não têm dono
+  if (userRole === 'agent' && userId) {
+    query = query.or(`assigned_to.eq.${userId},assigned_to.is.null`);
+  }
+
+  // 3. Ordenação
+  query = query.order('created_at', { ascending: false });
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error('Erro ao buscar contactos:', error);
+    throw error;
+  }
+
+  return data;
+};
 
 export async function createContact(contact: Omit<ContactData, 'id' | 'created_at' | 'updated_at'>) {
   const { data, error } = await supabase

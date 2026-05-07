@@ -1,6 +1,7 @@
 import {
   Phone, Users, CheckCircle, UsersRound, UserPlus, Mail,
-  MessageSquare, Clock, Timer, ArrowDown, ArrowUp, LucideIcon
+  MessageSquare, Clock, Timer, ArrowDown, ArrowUp, LucideIcon,
+  Loader2
 } from "lucide-react";
 import { useEffect } from "react";
 import { supabase } from "@/lib/supabase";
@@ -9,7 +10,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getDashboardData } from "@/lib/api/dashboard";
 import { useAuth } from "@/contexts/AuthContext";
-
+import { useNavigate } from "react-router-dom";
+import { ShieldAlert } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 // Mapeamento de strings para componentes de ícone do Lucide
 const iconMap: Record<string, LucideIcon> = {
@@ -33,15 +36,30 @@ const MetricSkeleton = () => (
 const Dashboard = () => {
   const { user } = useAuth();
   const companyId = user?.app_metadata?.company_id;
-  const queryClient = useQueryClient(); // <-- Instancia o cliente
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
-  // --- NOVO BLOCO: OUVINTE REALTIME INSTANTÂNEO ---
+  // 1. HOOK: Descobre o cargo do utilizador
+  const { data: currentUserRole, isLoading: loadingRole } = useQuery({
+    queryKey: ["userRole", companyId, user?.id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('company_users')
+        .select('role')
+        .eq('company_id', companyId)
+        .eq('user_id', user!.id)
+        .single();
+      return data?.role || 'agent';
+    },
+    enabled: !!companyId && !!user?.id
+  });
+
+  // 2. HOOK: Ouvinte Realtime
   useEffect(() => {
     if (!companyId) return;
 
     const channel = supabase
       .channel('dashboard_realtime')
-      // Fica ouvindo mudanças de Status Online/Offline dos atendentes
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'company_users', filter: `company_id=eq.${companyId}` },
@@ -49,7 +67,6 @@ const Dashboard = () => {
           queryClient.invalidateQueries({ queryKey: ["dashboard", companyId] });
         }
       )
-      // Opcional, mas incrível: Ouve mudanças em tickets para atualizar as métricas na hora!
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'tickets', filter: `company_id=eq.${companyId}` },
@@ -64,13 +81,40 @@ const Dashboard = () => {
     };
   }, [companyId, queryClient]);
 
-
+  // 3. HOOK: Busca os dados do Dashboard
   const { data, isLoading, isError } = useQuery({
     queryKey: ["dashboard", companyId],
     queryFn: () => getDashboardData(companyId),
     enabled: !!companyId,
   });
 
+  // --- BLOCOS DE SEGURANÇA (Agora na posição correta!) ---
+  if (loadingRole) {
+    return (
+      <div className="h-full flex items-center justify-center p-6">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (currentUserRole === 'agent') {
+    return (
+      <div className="h-[calc(100vh-3rem)] flex flex-col items-center justify-center text-center p-6 bg-secondary/10">
+        <div className="bg-destructive/10 p-4 rounded-full mb-4">
+          <ShieldAlert className="h-12 w-12 text-destructive" />
+        </div>
+        <h2 className="text-2xl font-bold text-foreground">Acesso Restrito</h2>
+        <p className="text-muted-foreground mt-2 max-w-sm">
+          Apenas administradores podem visualizar os indicadores da empresa.
+        </p>
+        <Button className="mt-6" onClick={() => navigate('/atendimentos')}>
+          Voltar para Atendimentos
+        </Button>
+      </div>
+    );
+  }
+
+  // --- RENDERIZAÇÃO DA PÁGINA (Para Admins) ---
   return (
     <div className="p-6 space-y-6">
       {/* Indicadores */}

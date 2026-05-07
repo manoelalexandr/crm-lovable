@@ -82,11 +82,28 @@ const Kanban = () => {
     })
   );
 
-  // Queries
+  const { user } = useAuth(); // Garantir que extraímos o 'user'
+
+  // 1. Descobre o cargo (role) do utilizador logado
+  const { data: currentUserRole } = useQuery({
+    queryKey: ["userRole", companyId, user?.id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('company_users')
+        .select('role')
+        .eq('company_id', companyId)
+        .eq('user_id', user!.id)
+        .single();
+      return data?.role || 'agent';
+    },
+    enabled: !!companyId && !!user?.id
+  });
+
+  // 2. Busca os dados do Kanban com a trava
   const { data, isLoading } = useQuery({
-    queryKey: ["kanban", companyId],
-    queryFn: () => getKanbanBoard(companyId!),
-    enabled: !!companyId,
+    queryKey: ["kanban", companyId, user?.id, currentUserRole],
+    queryFn: () => getKanbanBoard(companyId!, user!.id, currentUserRole),
+    enabled: !!companyId && !!currentUserRole,
   });
 
   const columns = useMemo(() => data?.columns || [], [data?.columns]);

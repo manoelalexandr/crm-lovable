@@ -10,46 +10,48 @@ import {
   Shield,
   MessageSquare,
 } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/lib/supabase";
 
 interface SidebarProps {
   collapsed: boolean;
 }
 
-// ─── Rotas ativas no MVP ───────────────────────────────────────────────────
 const activeMenuItems = [
-  { label: "Dashboard", icon: LayoutDashboard, path: "/dashboard" },
+  { label: "Dashboard", icon: LayoutDashboard, path: "/dashboard", adminOnly: true },
   { label: "Atendimentos", icon: Headphones, path: "/atendimentos" },
-  { label: "Chat Interno", icon: MessageSquare, path: "/chat-interno" },
+  //{ label: "Chat Interno", icon: MessageSquare, path: "/chat-interno" },
   { label: "Respostas Rápidas", icon: Zap, path: "/respostas-rapidas" },
   { label: "Kanban", icon: SquareKanban, path: "/kanban" },
   { label: "Contatos", icon: Users, path: "/contatos" },
   { label: "Tags", icon: Tag, path: "/tags" },
-  { label: "Conexões", icon: Plug, path: "/conexoes" },
-  { label: "Equipe", icon: Shield, path: "/equipe" },
+  { label: "Conexões", icon: Plug, path: "/conexoes", adminOnly: true },
+  { label: "Equipe", icon: Shield, path: "/equipe", adminOnly: true },
 ];
-
-// ─── Itens reservados para v2.0 (não visíveis) ────────────────────────────
-// { label: "Relatórios",        icon: BarChart3,    path: "/relatorios" }
-// { label: "Painel",            icon: Monitor,      path: "/painel" }
-// { label: "Agendamentos",      icon: CalendarClock,path: "/agendamentos" }
-// { label: "Campanhas",         icon: Megaphone,    path: "/campanhas" }
-// { label: "Flowbuilder",       icon: GitBranch,    path: "/flowbuilder" }
-// { label: "Informativos",      icon: FileText,     path: "/informativos" }
-// { label: "API",               icon: Code,         path: "/api" }
-// { label: "Usuários",          icon: UserCog,      path: "/usuarios" }
-// { label: "Config. Aniversário",icon: Cake,        path: "/aniversario" }
-// { label: "Filas & Chatbot",   icon: ListFilter,   path: "/filas" }
-// { label: "Talk.Ai",           icon: Bot,          path: "/talk-ai" }
-// { label: "Integrações",       icon: Puzzle,       path: "/integracoes" }
-// { label: "Financeiro",        icon: CreditCard,   path: "/financeiro" }
-// { label: "Configurações",     icon: SettingsIcon, path: "/configuracoes" }
-// { label: "Empresas",          icon: Building2,    path: "/empresas" }
-// { label: "Planos",            icon: CreditCard,   path: "/planos" }
 
 const AppSidebar = ({ collapsed }: SidebarProps) => {
   const location = useLocation();
+  const { company, user } = useAuth();
+  const companyId = company?.id;
 
   const isActive = (path: string) => location.pathname === path;
+
+  // Descobre o cargo (role) do utilizador logado
+  const { data: currentUserRole } = useQuery({
+    queryKey: ["userRole", companyId, user?.id],
+    queryFn: async () => {
+      if (!companyId || !user?.id) return 'agent';
+      const { data } = await supabase
+        .from('company_users')
+        .select('role')
+        .eq('company_id', companyId)
+        .eq('user_id', user.id)
+        .single();
+      return data?.role || 'agent';
+    },
+    enabled: !!companyId && !!user?.id
+  });
 
   return (
     <aside
@@ -70,6 +72,9 @@ const AppSidebar = ({ collapsed }: SidebarProps) => {
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-0.5">
         {activeMenuItems.map((item) => {
+          // A "CERCA" DO MENU: Se o item for apenas para admin e o utilizador for atendente, esconde o botão
+          if (item.adminOnly && currentUserRole === 'agent') return null;
+
           const Icon = item.icon;
           const active = isActive(item.path);
           return (

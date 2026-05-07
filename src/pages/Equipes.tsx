@@ -6,6 +6,9 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createTeamMember, getTeamMembers } from "@/lib/api/team";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
+import { supabase } from "@/lib/supabase";
+import { useNavigate } from "react-router-dom";
+import { ShieldAlert } from "lucide-react";
 import {
     Dialog,
     DialogContent,
@@ -30,6 +33,21 @@ const Equipe = () => {
     const { company, user: currentUser } = useAuth();
     const queryClient = useQueryClient();
     const companyId = company?.id;
+    const navigate = useNavigate();
+
+    const { data: currentUserRole, isLoading: loadingRole } = useQuery({
+        queryKey: ["userRole", companyId, currentUser?.id],
+        queryFn: async () => {
+            const { data } = await supabase
+                .from('company_users')
+                .select('role')
+                .eq('company_id', companyId)
+                .eq('user_id', currentUser!.id)
+                .single();
+            return data?.role || 'agent';
+        },
+        enabled: !!companyId && !!currentUser?.id
+    });
 
     const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -60,10 +78,27 @@ const Equipe = () => {
         onError: (error: any) => toast.error(error.message || "Erro ao adicionar membro"),
     });
 
-    if (isLoading) {
+    if (loadingRole || isLoading) {
         return (
-            <div className="flex-1 flex items-center justify-center h-full">
+            <div className="h-[calc(100vh-3rem)] flex items-center justify-center p-6">
                 <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            </div>
+        );
+    }
+
+    if (currentUserRole === 'agent') {
+        return (
+            <div className="h-[calc(100vh-3rem)] flex flex-col items-center justify-center text-center p-6 bg-secondary/10">
+                <div className="bg-destructive/10 p-4 rounded-full mb-4">
+                    <ShieldAlert className="h-12 w-12 text-destructive" />
+                </div>
+                <h2 className="text-2xl font-bold text-foreground">Acesso Restrito</h2>
+                <p className="text-muted-foreground mt-2 max-w-sm">
+                    Apenas administradores podem adicionar ou remover membros da equipa.
+                </p>
+                <Button className="mt-6" onClick={() => navigate('/atendimentos')}>
+                    Voltar para Atendimentos
+                </Button>
             </div>
         );
     }

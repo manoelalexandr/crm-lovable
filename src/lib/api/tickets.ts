@@ -35,37 +35,44 @@ export interface Message {
   status: string | null;
 }
 
-export async function getTickets(companyId: string, status: 'aguardando' | 'atendendo' | 'resolvido'): Promise<Ticket[]> {
-  const dbStatusMap = {
-    'aguardando': 'waiting',
-    'atendendo': 'attending',
-    'resolvido': 'resolved'
-  };
-
-  const { data, error } = await supabase
+export const getTickets = async (
+  companyId: string,
+  status: "aguardando" | "atendendo" | "resolvido",
+  userId?: string,
+  userRole?: string
+) => {
+  // 1. Inicia a busca padrão (AQUI ESTÁ A CORREÇÃO NO SELECT)
+  let query = supabase
     .from('tickets')
-    .select(`
-      *,
-      contacts (
-        id,
-        name,
-        phone,
-        avatar_url
-      )
-    `)
-    .eq('company_id', companyId)
-    .eq('status', dbStatusMap[status])
-    .order('last_message_at', { ascending: false });
+    .select(`*, contacts(*)`)
+    .eq('company_id', companyId);
+
+  // 2. Filtro de Status
+  if (status === 'aguardando') {
+    query = query.in('status', ['waiting', 'pending']);
+  } else if (status === 'atendendo') {
+    query = query.eq('status', 'attending');
+  } else {
+    query = query.eq('status', status);
+  }
+
+  // 3. A "CERCA": Filtro de Carteirização
+  if (userRole === 'agent' && userId) {
+    query = query.or(`assigned_to.eq.${userId},assigned_to.is.null`);
+  }
+
+  // 4. Ordenação
+  query = query.order('updated_at', { ascending: false });
+
+  const { data, error } = await query;
 
   if (error) {
     console.error('Erro ao buscar tickets:', error);
     throw error;
   }
 
-  // O Supabase retorna contacts como array se for 1:N, mas na modelagem de tickets um ticket tem 1 contact (N:1)
-  // Então o join devolve um objeto simples se configurado corretamente, vamos fazer o cast seguro
-  return (data || []) as unknown as Ticket[];
-}
+  return data;
+};
 
 export async function getTicketMessages(ticketId: string): Promise<Message[]> {
   // 1. Primeiro, descobrimos quem é o cliente (contact_id) dono deste ticket

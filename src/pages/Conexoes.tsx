@@ -7,6 +7,8 @@ import { getChannels, createChannel, updateChannel, deleteChannel, generateEvolu
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { format } from "date-fns";
+import { useNavigate } from "react-router-dom";
+import { ShieldAlert } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -23,9 +25,24 @@ import { useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 
 const Conexoes = () => {
-  const { company } = useAuth();
+  const { company, user } = useAuth();
   const queryClient = useQueryClient();
   const companyId = company?.id;
+  const navigate = useNavigate();
+
+  const { data: currentUserRole, isLoading: loadingRole } = useQuery({
+    queryKey: ["userRole", companyId, user?.id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('company_users')
+        .select('role')
+        .eq('company_id', companyId)
+        .eq('user_id', user!.id)
+        .single();
+      return data?.role || 'agent';
+    },
+    enabled: !!companyId && !!user?.id
+  });
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
@@ -258,6 +275,31 @@ const Conexoes = () => {
       deleteMutation.mutate(id);
     }
   };
+
+  if (loadingRole) {
+    return (
+      <div className="h-[calc(100vh-3rem)] flex items-center justify-center p-6">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (currentUserRole === 'agent') {
+    return (
+      <div className="h-[calc(100vh-3rem)] flex flex-col items-center justify-center text-center p-6 bg-secondary/10">
+        <div className="bg-destructive/10 p-4 rounded-full mb-4">
+          <ShieldAlert className="h-12 w-12 text-destructive" />
+        </div>
+        <h2 className="text-2xl font-bold text-foreground">Acesso Restrito</h2>
+        <p className="text-muted-foreground mt-2 max-w-sm">
+          Apenas administradores podem gerir as conexões e canais.
+        </p>
+        <Button className="mt-6" onClick={() => navigate('/atendimentos')}>
+          Voltar para Atendimentos
+        </Button>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (

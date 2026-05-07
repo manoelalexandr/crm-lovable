@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import { MessageCircle } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 import {
   Dialog,
   DialogContent,
@@ -31,7 +32,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 
 const Contatos = () => {
-  const { company } = useAuth();
+  const { company, user } = useAuth();
   const queryClient = useQueryClient();
   const companyId = company?.id;
   const navigate = useNavigate();
@@ -45,10 +46,26 @@ const Contatos = () => {
   const [email, setEmail] = useState("");
   const [notes, setNotes] = useState("");
 
+  // 1. Descobre o cargo (role) do usuário logado na tabela company_users
+  const { data: currentUserRole } = useQuery({
+    queryKey: ["userRole", companyId, user?.id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('company_users')
+        .select('role')
+        .eq('company_id', companyId)
+        .eq('user_id', user!.id)
+        .single();
+      return data?.role || 'agent'; // Se der erro, assume como atendente por segurança
+    },
+    enabled: !!companyId && !!user?.id
+  });
+
+  // 2. Busca contatos passando o ID e o Cargo como trava
   const { data: contacts = [], isLoading: contactsLoading } = useQuery({
-    queryKey: ["contacts", companyId],
-    queryFn: () => getContacts(companyId!),
-    enabled: !!companyId,
+    queryKey: ["contacts", companyId, user?.id, currentUserRole],
+    queryFn: () => getContacts(companyId!, user!.id, currentUserRole),
+    enabled: !!companyId && !!currentUserRole,
   });
 
   const { data: allTags = [], isLoading: tagsLoading } = useQuery({
@@ -58,8 +75,43 @@ const Contatos = () => {
   });
 
   const saveMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const payload = { name, phone, email, notes };
+
+      // Se for um contato NOVO (não está editando), fazemos a checagem de duplicidade
+      if (!editingContact && phone) {
+        // Busca se já existe alguém com esse telefone na empresa e pega o ID do dono
+        const { data: existingContact } = await supabase
+          .from('contacts')
+          .select('id, name, assigned_to')
+          .eq('company_id', companyId)
+          .eq('phone', phone)
+          .maybeSingle();
+
+        // Se o número já existe no banco...
+        if (existingContact) {
+          const contact = existingContact as any; // <-- "Acalma" o TypeScript
+          // Se o cliente já tiver um atendente vinculado
+          if (contact.assigned_to) {
+            // Vai buscar o nome do atendente à tabela company_users
+            const { data: agentData } = await supabase
+              .from('company_users')
+              .select('name, display_name')
+              .eq('company_id', companyId)
+              .eq('user_id', contact.assigned_to)
+              .maybeSingle();
+
+            const agent = agentData as any; // <-- "Acalma" o TypeScript novamente
+            const agentName = agent?.name || agent?.display_name || "outro atendente";
+
+            throw new Error(`Esse número de Whatsapp já está vinculado ao atendente "${agentName}".`);
+          } else {
+            // Se o cliente existir, mas estiver na fila (sem dono)
+            throw new Error(`Esse número de Whatsapp já está cadastrado no sistema, mas aguarda atendimento na fila.`);
+          }
+        }
+      }
+
       if (editingContact) {
         return updateContact(editingContact.id, payload);
       }
@@ -71,7 +123,9 @@ const Contatos = () => {
       resetForm();
       toast.success(editingContact ? "Contato atualizado!" : "Contato criado!");
     },
-    onError: () => toast.error("Erro ao salvar contato")
+    onError: (error: any) => {
+      toast.error(error.message || "Erro ao salvar contato");
+    }
   });
 
   const deleteMutation = useMutation({
@@ -155,7 +209,7 @@ const Contatos = () => {
   }
 
   // Helper to extract flattened tags from contact_tags structure
-  const extractTags = (contact: ContactData): TagData[] => {
+  const extractTags = (contact: any): TagData[] => {
     if (!contact.contact_tags) return [];
     return contact.contact_tags.map((ct: any) => ct.tags).filter(Boolean);
   };
@@ -192,7 +246,7 @@ const Contatos = () => {
               </TableRow>
             ) : (
               contacts.map(contact => {
-                const contactTags = extractTags(contact);
+                const contactTags = extractTags(contact as any);
                 return (
                   <TableRow key={contact.id}>
                     <TableCell className="font-medium text-sm">{contact.name}</TableCell>
@@ -231,10 +285,10 @@ const Contatos = () => {
                       </div>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="ghost" size="sm" onClick={() => handleIniciarAtendimento(contact)} className="text-blue-500 hover:text-blue-700 hover:bg-blue-50" title="Iniciar Conversa">
+                      <Button variant="ghost" size="sm" onClick={() => handleIniciarAtendimento(contact as any)} className="text-blue-500 hover:text-blue-700 hover:bg-blue-50" title="Iniciar Conversa">
                         <MessageCircle className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={() => openModal(contact)}>
+                      <Button variant="ghost" size="sm" onClick={() => openModal(contact as any)}>
                         <Edit2 className="h-4 w-4" />
                       </Button>
                       <Button variant="ghost" size="sm" onClick={() => handleDelete(contact.id)} className="text-destructive hover:text-destructive">

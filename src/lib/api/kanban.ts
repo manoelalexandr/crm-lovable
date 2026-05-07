@@ -18,8 +18,11 @@ export interface KanbanTicket {
   kanban_column_id: string | null;
 }
 
-// No arquivo kanban.ts
-export async function getKanbanBoard(companyId: string) {
+export async function getKanbanBoard(
+  companyId: string,
+  userId?: string,     // <-- Novo argumento
+  userRole?: string    // <-- Novo argumento
+) {
   // 1. Busca Colunas
   const { data: cols, error: colsError } = await supabase
     .from('kanban_columns')
@@ -31,22 +34,24 @@ export async function getKanbanBoard(companyId: string) {
 
   const columns = cols as KanbanColumnData[];
   const defaultColumnId = columns.length > 0 ? columns[0].id : null;
-  // Busca a coluna que tem a cor 'done' para tickets finalizados
   const doneColumnId = columns.find(c => c.color === 'done')?.id || defaultColumnId;
-  // Busca a coluna que tem a cor 'attending' para tickets em atendimento
   const attendingColumnId = columns.find(c => c.color === 'attending')?.id || defaultColumnId;
 
-  // 2. Busca Tickets
-  const { data: ticketsData, error: ticketsError } = await supabase
+  // 2. Prepara a Busca de Tickets
+  let query = supabase
     .from('tickets')
     .select(`
       id, ticket_number, last_message, kanban_value, created_at, 
-      status, kanban_column_id,
+      status, kanban_column_id, assigned_to,
       contacts (name, phone)
     `)
-    .eq('company_id', companyId)
-    // REMOVEMOS o filtro de status para que o 'finalizado' também apareça no Kanban
-    .order('updated_at', { ascending: false });
+    .eq('company_id', companyId);
+
+  if (userRole === 'agent' && userId) {
+    query = query.or(`assigned_to.eq.${userId},assigned_to.is.null`);
+  }
+
+  const { data: ticketsData, error: ticketsError } = await query.order('updated_at', { ascending: false });
 
   if (ticketsError) throw ticketsError;
 
