@@ -462,8 +462,8 @@ export async function importChatHistory(ticketId: string, companyId: string, age
   }
 }
 
-export async function syncContactAvatar(ticketId: string, contactId: string) {
-  // 1. Busca os dados do canal e o telefone do contato
+// Adicione o parâmetro forceUpdate = false
+export async function syncContactAvatar(ticketId: string, contactId: string, forceUpdate: boolean = false) {
   const { data: ticket, error } = await supabase
     .from('tickets')
     .select(`
@@ -478,13 +478,12 @@ export async function syncContactAvatar(ticketId: string, contactId: string) {
   const contactData = ticket.contacts as any;
   const channelData = ticket.channels as any;
 
-  // Se já tem foto, ou se falta alguma configuração do canal, encerra aqui
-  if (contactData.avatar_url || !channelData.evolution_instance_name || !contactData.phone) {
+  // AGORA: Só encerra se já tiver foto E não for uma atualização forçada
+  if ((contactData.avatar_url && !forceUpdate) || !channelData.evolution_instance_name || !contactData.phone) {
     return;
   }
 
   try {
-    // 2. Pede a foto para a Evolution API
     const response = await fetch(`${channelData.evolution_api_url}/chat/fetchProfilePictureUrl/${channelData.evolution_instance_name}`, {
       method: 'POST',
       headers: {
@@ -492,18 +491,20 @@ export async function syncContactAvatar(ticketId: string, contactId: string) {
         'apikey': channelData.evolution_api_key
       },
       body: JSON.stringify({
-        number: contactData.phone.replace(/\D/g, '') // Envia só os números
+        number: contactData.phone.replace(/\D/g, '')
       })
     });
 
     const data = await response.json();
 
-    // 3. Se a API retornou uma URL válida, salva no Supabase!
     if (data && data.profilePictureUrl) {
       await supabase
         .from('contacts')
         .update({ avatar_url: data.profilePictureUrl })
         .eq('id', contactId);
+    } else if (forceUpdate) {
+      // Se forçamos a busca e a Evolution disse que ele não tem foto, removemos o link quebrado
+      await supabase.from('contacts').update({ avatar_url: null }).eq('id', contactId);
     }
   } catch (error) {
     console.error('Erro ao buscar foto de perfil na Evolution:', error);

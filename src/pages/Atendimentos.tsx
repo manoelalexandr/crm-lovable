@@ -45,39 +45,16 @@ const Atendimentos = () => {
   const [searchQuery, setSearchQuery] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [showQuickReplies, setShowQuickReplies] = useState(false);
-  const [showOptions, setShowOptions] = useState(false);
-  const [showTransferModal, setShowTransferModal] = useState(false);
-  const [transferToUserId, setTransferToUserId] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const companyId = company?.id;
 
-  // 1. Descobre o cargo (role) do usuário logado na tabela company_users
-  const { data: currentUserRole } = useQuery({
-    queryKey: ["userRole", companyId, user?.id],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('company_users')
-        .select('role')
-        .eq('company_id', companyId)
-        .eq('user_id', user!.id)
-        .single();
-      return data?.role || 'agent'; // Se der erro, assume como atendente por segurança
-    },
-    enabled: !!companyId && !!user?.id
-  });
-
-  // 2. Busca tickets da aba atual (agora passando o ID e o Cargo como trava)
+  // Busca tickets da aba atual
   const { data: currentList = [], isLoading: isLoadingTickets } = useQuery({
-    queryKey: ["tickets", companyId, activeTab, user?.id, currentUserRole],
-    queryFn: () => getTickets(
-      companyId!,
-      activeTab as "aguardando" | "atendendo" | "resolvido",
-      user!.id,
-      currentUserRole
-    ),
-    enabled: !!companyId && activeTab !== "grupos" && !!currentUserRole,
+    queryKey: ["tickets", companyId, activeTab],
+    queryFn: () => getTickets(companyId!, activeTab as "aguardando" | "atendendo" | "resolvido"),
+    enabled: !!companyId && activeTab !== "grupos",
   });
 
   // Busca mensagens do ticket selecionado
@@ -204,29 +181,9 @@ const Atendimentos = () => {
     }
   }, [selectedTicket?.id]);
 
-  useEffect(() => {
-    if (selectedTicket && selectedTicket.unread_count > 0) {
-      const clearUnreadCount = async () => {
-        await supabase
-          .from('tickets')
-          .update({ unread_count: 0 })
-          .eq('id', selectedTicket.id);
-
-        // Atualiza a lista na tela imediatamente
-        queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
-      };
-      clearUnreadCount();
-    }
-  }, [selectedTicket?.id, selectedTicket?.unread_count, companyId, queryClient]);
-
   const sendMessageMutation = useMutation({
     mutationFn: (content: string) => sendMessage(selectedTicket!.id, content, companyId!, user!.id),
-    onSuccess: async () => {
-      // CAPTURA AUTOMÁTICA: Se o cliente não tem dono, quem respondeu primeiro ganha a carteira
-      if (!(selectedTicket as any)?.assigned_to) {
-        await supabase.from('tickets').update({ assigned_to: user!.id } as any).eq('id', selectedTicket!.id);
-        await supabase.from('contacts').update({ assigned_to: user!.id } as any).eq('id', selectedTicket!.contact_id);
-      }
+    onSuccess: () => {
       setMessageInput("");
       queryClient.invalidateQueries({ queryKey: ["messages", selectedTicket!.id] });
       queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
@@ -262,47 +219,12 @@ const Atendimentos = () => {
   const sendMediaMutation = useMutation({
     mutationFn: ({ url, type }: { url: string, type: any }) =>
       sendMediaMessage(selectedTicket!.id, url, type, companyId!, user!.id),
-    onSuccess: async () => {
-      // CAPTURA AUTOMÁTICA também para arquivos
-      if (!(selectedTicket as any)?.assigned_to) {
-        await supabase.from('tickets').update({ assigned_to: user!.id } as any).eq('id', selectedTicket!.id);
-        await supabase.from('contacts').update({ assigned_to: user!.id } as any).eq('id', selectedTicket!.contact_id);
-      }
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["messages", selectedTicket?.id] });
       queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
     },
     onError: () => toast.error("Erro ao enviar arquivo")
   });
-
-  // Busca a equipe para a lista de transferência (ignorando o próprio usuário)
-  const { data: teamMembers = [] } = useQuery({
-    queryKey: ["team", companyId],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from('company_users')
-        .select('user_id, name, display_name')
-        .eq('company_id', companyId)
-        .neq('user_id', user!.id);
-      return data || [];
-    },
-    enabled: !!companyId
-  });
-
-  // Executa a transferência de fato
-  const transferMutation = useMutation({
-    mutationFn: async (newUserId: string) => {
-      await supabase.from('tickets').update({ assigned_to: newUserId } as any).eq('id', selectedTicket!.id);
-      await supabase.from('contacts').update({ assigned_to: newUserId } as any).eq('id', selectedTicket!.contact_id);
-    },
-    onSuccess: () => {
-      toast.success("Cliente transferido com sucesso!");
-      setShowTransferModal(false);
-      setSelectedTicket(null); // Fecha o chat, pois a carteira não é mais dele
-      queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
-    },
-    onError: () => toast.error("Erro ao transferir cliente.")
-  });
-
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -414,7 +336,18 @@ const Atendimentos = () => {
                       ${selectedTicket?.id === ticket.id ? "bg-sidebar-accent" : "hover:bg-secondary/50"}`}
               >
                 {ticket.contacts?.avatar_url ? (
-                  <img src={ticket.contacts.avatar_url} alt="Avatar" className="h-9 w-9 rounded-full object-cover shrink-0 border border-border" />
+                  <img
+                    src={ticket.contacts.avatar_url}
+                    alt="Avatar"
+                    className="h-9 w-9 rounded-full object-cover shrink-0 border border-border"
+                    onError={(e) => {
+                      e.currentTarget.onerror = null; // Previne loop infinito
+                      // Dispara a busca pela nova foto na Evolution
+                      syncContactAvatar(ticket.id, ticket.contact_id, true).then(() => {
+                        queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
+                      });
+                    }}
+                  />
                 ) : (
                   <div className="h-9 w-9 rounded-full bg-muted flex items-center justify-center shrink-0 text-sm font-medium text-muted-foreground">
                     {contactName.charAt(0).toUpperCase()}
@@ -453,7 +386,7 @@ const Atendimentos = () => {
         <div className={`${selectedTicket ? 'flex' : 'hidden md:flex'} flex-1 flex-col bg-card overflow-hidden h-full min-w-0`}>
 
           {/* Chat Header */}
-          <div className="h-14 border-b border-border flex items-center justify-between px-4 bg-card shrink-0 z-[20] w-full relative">
+          <div className="h-14 border-b border-border flex items-center justify-between px-4 bg-card shrink-0 z-10 w-full overflow-hidden">
             <div className="flex items-center gap-2 md:gap-3 flex-1 min-w-0 pr-2">
 
               {/* BOTÃO VOLTAR (Só aparece no mobile) */}
@@ -465,7 +398,17 @@ const Atendimentos = () => {
               </button>
 
               {selectedTicket.contacts?.avatar_url ? (
-                <img src={selectedTicket.contacts.avatar_url} alt="Avatar" className="h-8 w-8 rounded-full object-cover shrink-0 border border-slate-200" />
+                <img
+                  src={selectedTicket.contacts.avatar_url}
+                  alt="Avatar"
+                  className="h-8 w-8 rounded-full object-cover shrink-0 border border-slate-200"
+                  onError={(e) => {
+                    e.currentTarget.onerror = null;
+                    syncContactAvatar(selectedTicket.id, selectedTicket.contact_id, true).then(() => {
+                      queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
+                    });
+                  }}
+                />
               ) : (
                 <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center shrink-0 text-sm font-bold text-slate-400 border border-slate-200">
                   {(selectedTicket.contacts?.name || 'D').charAt(0).toUpperCase()}
@@ -509,67 +452,9 @@ const Atendimentos = () => {
                   : <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />}
                 <span className="hidden sm:inline">Finalizar</span>
               </Button>
-              <div className="relative">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground shrink-0"
-                  title="Mais opções"
-                  onClick={() => setShowOptions(!showOptions)}
-                >
-                  <MoreVertical className="h-4 w-4" />
-                </Button>
-
-                {/* Dropdown Menu */}
-                {showOptions && (
-                  <div className="absolute right-0 top-10 w-48 bg-card border border-border rounded-md shadow-lg z-50 py-1">
-                    <button
-                      className="w-full text-left px-4 py-2 text-sm hover:bg-secondary transition-colors text-foreground"
-                      onClick={() => {
-                        setShowOptions(false);
-                        setShowTransferModal(true);
-                      }}
-                    >
-                      Transferir Atendimento
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Modal de Transferência */}
-              {showTransferModal && (
-                <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
-                  <div className="bg-card border border-border rounded-lg shadow-xl w-full max-w-md p-5">
-                    <h3 className="text-lg font-bold mb-2">Transferir Atendimento</h3>
-                    <p className="text-sm text-muted-foreground mb-4">
-                      Selecione para qual atendente deseja transferir a carteira de <b>{selectedTicket?.contacts?.name}</b>.
-                    </p>
-
-                    <select
-                      className="w-full h-10 border border-border rounded-md px-3 bg-background text-sm mb-4"
-                      value={transferToUserId}
-                      onChange={(e) => setTransferToUserId(e.target.value)}
-                    >
-                      <option value="">Selecione o novo dono...</option>
-                      {teamMembers.map((member: any) => (
-                        <option key={member.user_id} value={member.user_id}>
-                          {member.name || member.display_name || 'Usuário'}
-                        </option>
-                      ))}
-                    </select>
-
-                    <div className="flex justify-end gap-2 mt-4">
-                      <Button variant="outline" onClick={() => setShowTransferModal(false)}>Cancelar</Button>
-                      <Button
-                        disabled={!transferToUserId || transferMutation.isPending}
-                        onClick={() => transferMutation.mutate(transferToUserId)}
-                      >
-                        {transferMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Transferir Cliente"}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              )}
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground shrink-0" title="Mais opções">
+                <MoreVertical className="h-4 w-4" />
+              </Button>
             </div>
           </div>
 
