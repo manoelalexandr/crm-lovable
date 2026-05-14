@@ -37,23 +37,31 @@ export interface Message {
 
 export const getTickets = async (
   companyId: string,
-  status: "aguardando" | "atendendo" | "resolvido",
+  status: "aguardando" | "atendendo" | "resolvido" | "grupos", // Aceita o status 'grupos'
   userId?: string,
   userRole?: string
 ) => {
-  // 1. Inicia a busca padrão (AQUI ESTÁ A CORREÇÃO NO SELECT)
+  // 1. Inicia a busca (Usando o inner join para podermos filtrar pelo telefone)
   let query = supabase
     .from('tickets')
-    .select(`*, contacts(*)`)
+    .select(`*, contacts!inner(*)`)
     .eq('company_id', companyId);
 
-  // 2. Filtro de Status
-  if (status === 'aguardando') {
-    query = query.in('status', ['waiting', 'pending']);
-  } else if (status === 'atendendo') {
-    query = query.eq('status', 'attending');
+  // 2. Filtro de Status e Separação de Grupos
+  if (status === 'grupos') {
+    // Se estiver na aba grupos, puxa APENAS os contatos que têm "g.us" no telefone
+    query = query.like('contacts.phone', '%g.us%');
   } else {
-    query = query.eq('status', status);
+    // Se não for a aba grupos, ESCONDE os grupos para não poluir o atendimento normal
+    query = query.not('contacts.phone', 'like', '%g.us%');
+
+    if (status === 'aguardando') {
+      query = query.in('status', ['waiting', 'pending']);
+    } else if (status === 'atendendo') {
+      query = query.eq('status', 'attending');
+    } else if (status === 'resolvido') {
+      query = query.eq('status', 'resolved');
+    }
   }
 
   // 3. A "CERCA": Filtro de Carteirização
@@ -369,7 +377,10 @@ export async function importChatHistory(ticketId: string, companyId: string, age
   }
 
   // 2. Prepara os dados para a Evolution API
-  const remoteJid = `${contactPhone.replace(/\D/g, '')}@s.whatsapp.net`;
+  const isGroup = contactPhone.includes('g.us');
+  const remoteJid = isGroup
+    ? contactPhone
+    : `${contactPhone.replace(/\D/g, '')}@s.whatsapp.net`;
 
   try {
     // 3. Faz a requisição para a Evolution API puxar o histórico

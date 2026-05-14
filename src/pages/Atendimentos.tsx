@@ -50,11 +50,31 @@ const Atendimentos = () => {
 
   const companyId = company?.id;
 
-  // Busca tickets da aba atual
+  // 1. Descobre o cargo (role) do utilizador logado
+  const { data: currentUserRole } = useQuery({
+    queryKey: ["userRole", companyId, user?.id],
+    queryFn: async () => {
+      const { data } = await supabase
+        .from('company_users')
+        .select('role')
+        .eq('company_id', companyId)
+        .eq('user_id', user!.id)
+        .single();
+      return data?.role || 'agent';
+    },
+    enabled: !!companyId && !!user?.id
+  });
+
+  // 2. Busca tickets da aba atual (Agora com a aba de grupos ATIVADA)
   const { data: currentList = [], isLoading: isLoadingTickets } = useQuery({
-    queryKey: ["tickets", companyId, activeTab],
-    queryFn: () => getTickets(companyId!, activeTab as "aguardando" | "atendendo" | "resolvido"),
-    enabled: !!companyId && activeTab !== "grupos",
+    queryKey: ["tickets", companyId, activeTab, user?.id, currentUserRole],
+    queryFn: () => getTickets(
+      companyId!,
+      activeTab as "aguardando" | "atendendo" | "resolvido" | "grupos",
+      user!.id,
+      currentUserRole
+    ),
+    enabled: !!companyId && !!currentUserRole, // Removemos a trava dos grupos
   });
 
   // Busca mensagens do ticket selecionado
@@ -180,6 +200,28 @@ const Atendimentos = () => {
       });
     }
   }, [selectedTicket?.id]);
+
+  // ZERAR NOTIFICAÇÕES INSTANTANEAMENTE ao abrir o chat ou receber mensagem com ele aberto
+  useEffect(() => {
+    if (selectedTicket && selectedTicket.unread_count > 0) {
+      const clearUnreadCount = async () => {
+        // 1. Zera no Banco de Dados
+        await supabase
+          .from('tickets')
+          .update({ unread_count: 0 })
+          .eq('id', selectedTicket.id);
+
+        // 2. Atualiza a lista lateral e o Sininho
+        queryClient.invalidateQueries({ queryKey: ["tickets", companyId] });
+        queryClient.invalidateQueries({ queryKey: ["unread_notifications"] });
+
+        // 3. Atualiza o estado local para a bolinha sumir NA HORA
+        setSelectedTicket(prev => prev ? { ...prev, unread_count: 0 } : null);
+      };
+
+      clearUnreadCount();
+    }
+  }, [selectedTicket?.id, selectedTicket?.unread_count, companyId, queryClient]);
 
   const sendMessageMutation = useMutation({
     mutationFn: (content: string) => sendMessage(selectedTicket!.id, content, companyId!, user!.id),

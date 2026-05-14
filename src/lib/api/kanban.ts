@@ -43,8 +43,9 @@ export async function getKanbanBoard(
     .select(`
       id, ticket_number, last_message, kanban_value, created_at, 
       status, kanban_column_id, assigned_to,
-      contacts (name, phone)
+      contacts!inner (name, phone)
     `)
+    .not('contacts.phone', 'like', '%g.us%') // <-- TRAVA: Esconde os grupos do Kanban
     .eq('company_id', companyId);
 
   if (userRole === 'agent' && userId) {

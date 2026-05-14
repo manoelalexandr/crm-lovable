@@ -193,9 +193,13 @@ export async function sendEvolutionMessage(
     }
     const sendUrl = `${formattedUrl}/message/sendText/${instanceName}`;
 
-    // Remote JID costuma ser o número com @s.whatsapp.net
-    // Se vier apenas o número, formatamos
-    const number = remoteJid.includes('@') ? remoteJid : `${remoteJid}@s.whatsapp.net`;
+    // LÓGICA INTELIGENTE: Se for grupo mantém o g.us, se for contato limpa formatação e adiciona s.whatsapp.net
+    const cleanNumber = remoteJid.replace(/\D/g, '');
+    const isGroup = remoteJid.includes('g.us') || remoteJid.includes('-') || (cleanNumber.length >= 17 && cleanNumber.startsWith('120'));
+
+    const number = isGroup
+      ? `${cleanNumber}@g.us`
+      : `${cleanNumber}@s.whatsapp.net`;
 
     const response = await fetch(sendUrl, {
       method: 'POST',
@@ -243,7 +247,14 @@ export async function sendEvolutionMedia(
       formattedUrl = formattedUrl.slice(0, -1);
     }
     const sendUrl = `${formattedUrl}/message/sendMedia/${instanceName}`;
-    const number = remoteJid.includes('@') ? remoteJid : `${remoteJid}@s.whatsapp.net`;
+
+    // LÓGICA INTELIGENTE BLINDADA: Preserva grupos antigos, novos e higieniza contatos individuais
+    const cleanNumber = remoteJid.replace(/\D/g, '');
+    const isGroup = remoteJid.includes('g.us') || remoteJid.includes('-') || (cleanNumber.length >= 17 && cleanNumber.startsWith('120'));
+
+    const number = isGroup
+      ? `${cleanNumber}@g.us`
+      : `${cleanNumber}@s.whatsapp.net`;
 
     const response = await fetch(sendUrl, {
       method: 'POST',

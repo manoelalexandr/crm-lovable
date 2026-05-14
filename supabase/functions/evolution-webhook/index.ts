@@ -20,13 +20,11 @@ Deno.serve(async (req: Request) => {
 
     if (event === "MESSAGES_UPSERT" || event === "messages.upsert") {
       // 1. TRAVAS DE SEGURANÇA ULTRA ROBUSTAS
-
-      // Evolution API pode enviar o payload de várias formas dependendo da versão
       let actualData = data;
       if (Array.isArray(data)) {
-        actualData = data[0]; // Versões antigas mandavam array
+        actualData = data[0];
       } else if (data?.messages && Array.isArray(data.messages)) {
-        actualData = data.messages[0]; // Baileys padrão manda dentro de data.messages
+        actualData = data.messages[0];
       }
 
       const messageObj = actualData?.message;
@@ -34,20 +32,23 @@ Deno.serve(async (req: Request) => {
       const pushName = actualData?.pushName || messageObj?.pushName || "";
 
       if (!key) {
-        console.log("[Webhook] Payload não contém 'key', ignorando. Data recebida:", JSON.stringify(data));
         return new Response("No key object", { status: 200 });
       }
 
       const remoteJid = key?.remoteJid;
       if (!remoteJid || remoteJid === "status@broadcast") {
-        console.log("[Webhook] Mensagem de status ou sem JID, ignorando.");
         return new Response("Ignored broadcast", { status: 200 });
       }
 
       const fromMe = key?.fromMe;
-      const phoneNumber = remoteJid.split("@")[0];
 
-      // Identificar o tipo de mensagem
+      // --- MAGIA DOS GRUPOS AQUI ---
+      const isGroup = remoteJid.includes('@g.us');
+      // Se for grupo, guarda com o @g.us! Se for pessoa, limpa o arroba.
+      const phoneNumber = isGroup ? remoteJid : remoteJid.split("@")[0];
+      const participant = key?.participant; // ID de quem falou no grupo
+      // ------------------------------
+
       const messageType = actualData?.messageType || Object.keys(messageObj || {}).find(k =>
         ['conversation', 'extendedTextMessage', 'imageMessage', 'audioMessage', 'videoMessage', 'documentMessage'].includes(k)
       );
@@ -56,13 +57,10 @@ Deno.serve(async (req: Request) => {
       let mediaUrl = null;
       let mediaType = "text";
 
-      // Se for apenas uma confirmação de leitura vazia, ignora para não poluir o banco
       if (!messageContent && !messageType) {
-        console.log("[Webhook] Mensagem sem conteúdo legível, ignorando.");
         return new Response("Empty content", { status: 200 });
       }
 
-      // Encontrar o canal pela instância
       const { data: channel, error: channelError } = await supabase
         .from("channels")
         .select("*")
@@ -70,14 +68,12 @@ Deno.serve(async (req: Request) => {
         .single();
 
       if (channelError || !channel) {
-        console.error("Channel not found for instance:", instanceName);
         return new Response("Channel not found", { status: 404 });
       }
 
-      // Processar Mídia se necessário
+      // Processar Mídia
       if (['imageMessage', 'audioMessage', 'videoMessage', 'documentMessage'].includes(messageType || '')) {
         mediaType = messageType!.replace('Message', '');
-        console.log(`[Webhook] Processando mídia do tipo: ${mediaType}`);
 
         try {
           const fetchMediaUrl = `${channel.evolution_api_url.replace(/\/$/, '')}/chat/getBase64FromMediaMessage/${instanceName}`;
@@ -109,9 +105,6 @@ Deno.serve(async (req: Request) => {
               if (!uploadError) {
                 const { data: { publicUrl } } = supabase.storage.from('chat_media').getPublicUrl(filePath);
                 mediaUrl = publicUrl;
-                if (!messageContent) messageContent = `[Arquivo de ${mediaType}]`;
-              } else {
-                console.error("[Storage] Erro no upload:", uploadError);
               }
             }
           }
@@ -120,11 +113,26 @@ Deno.serve(async (req: Request) => {
         }
       }
 
+      // --- INJEÇÃO DE QUEM FALOU NO GRUPO ---
+      if (isGroup && !fromMe) {
+        const senderName = pushName || "Membro do Grupo";
+        if (messageContent) {
+          messageContent = `*[${senderName}]*\n${messageContent}`;
+        } else if (mediaUrl) {
+          messageContent = `*[${senderName}] enviou um arquivo*`;
+        }
+      } else if (!messageContent && mediaUrl) {
+        messageContent = `[Arquivo de ${mediaType}]`;
+      }
+      // --------------------------------------
+
       if (!messageContent && !mediaUrl) return new Response("Empty message, skipping", { status: 200 });
 
       const companyId = channel.company_id;
 
-      // Encontrar ou criar o contato
+      // --- NOME E DADOS DO CONTATO / GRUPO ---
+      let contactName = pushName || phoneNumber;
+
       const { data: existingContact, error: contactError } = await supabase
         .from("contacts")
         .select("*")
@@ -134,13 +142,49 @@ Deno.serve(async (req: Request) => {
 
       let contact = existingContact;
 
+      // Se o contato/grupo não existe, vamos criar
       if (!contact) {
+        let avatarUrl = null;
+
+        if (isGroup) {
+          const groupLastDigits = phoneNumber.split('@')[0].slice(-4);
+          contactName = `Grupo (${groupLastDigits})`; // Nome provisório
+
+          // Vai à Evolution API perguntar o nome real e a foto do grupo!
+          try {
+            const groupMetaUrl = `${channel.evolution_api_url.replace(/\/$/, '')}/group/findGroupMetadata/${instanceName}?groupJid=${remoteJid}`;
+            const metaRes = await fetch(groupMetaUrl, {
+              method: 'GET',
+              headers: { 'apikey': channel.evolution_api_key }
+            });
+            if (metaRes.ok) {
+              const meta = await metaRes.json();
+              if (meta && meta.subject) contactName = meta.subject; // Nome real do grupo
+            }
+
+            // Busca a foto do grupo
+            const picUrl = `${channel.evolution_api_url.replace(/\/$/, '')}/chat/fetchProfilePictureUrl/${instanceName}`;
+            const picRes = await fetch(picUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'apikey': channel.evolution_api_key },
+              body: JSON.stringify({ number: remoteJid })
+            });
+            if (picRes.ok) {
+              const picData = await picRes.json();
+              if (picData && picData.profilePictureUrl) avatarUrl = picData.profilePictureUrl;
+            }
+          } catch (e) {
+            console.error("[Webhook] Erro ao buscar dados do grupo", e);
+          }
+        }
+
         const { data: newContact, error: createContactError } = await supabase
           .from("contacts")
           .insert({
             company_id: companyId,
-            name: pushName || phoneNumber,
+            name: contactName,
             phone: phoneNumber,
+            avatar_url: avatarUrl // Já salva com a foto!
           })
           .select()
           .single();
@@ -149,7 +193,6 @@ Deno.serve(async (req: Request) => {
         contact = newContact;
       }
 
-      // Encontrar ticket aberto
       const { data: activeTicket } = await supabase
         .from("tickets")
         .select("*")
@@ -164,7 +207,6 @@ Deno.serve(async (req: Request) => {
       let ticket = activeTicket;
 
       if (!ticket) {
-        console.log(`[Webhook] Nenhum ticket ativo para contact=${contact.id}. Criando novo.`);
         const { data: newTicket, error: createTicketError } = await supabase
           .from("tickets")
           .insert({
@@ -182,7 +224,6 @@ Deno.serve(async (req: Request) => {
         ticket = newTicket;
       }
 
-      // Inserir a mensagem
       const { error: insertMsgError } = await supabase
         .from("messages")
         .insert({
@@ -197,7 +238,6 @@ Deno.serve(async (req: Request) => {
 
       if (insertMsgError) throw insertMsgError;
 
-      // Atualizar meta do ticket
       await supabase
         .from("tickets")
         .update({
@@ -212,7 +252,6 @@ Deno.serve(async (req: Request) => {
     }
 
     if (event === "CONNECTION_UPDATE") {
-      console.log("Connection update received:", data);
       const state = data.state;
       let dbStatus = 'disconnected';
       if (state === 'open') dbStatus = 'connected';
@@ -225,11 +264,6 @@ Deno.serve(async (req: Request) => {
           updated_at: new Date().toISOString()
         })
         .eq("evolution_instance_name", instanceName);
-
-      if (updateError) {
-        console.error("Error updating channel status:", updateError);
-        return new Response("Error updating status", { status: 500 });
-      }
 
       return new Response("Status updated", { status: 200 });
     }
