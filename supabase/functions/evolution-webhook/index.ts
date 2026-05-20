@@ -71,45 +71,68 @@ Deno.serve(async (req: Request) => {
         return new Response("Channel not found", { status: 404 });
       }
 
-      // Processar Mídia
+      // Processar Mídia se necessário (Otimizado para ler a base64 direta do payload)
       if (['imageMessage', 'audioMessage', 'videoMessage', 'documentMessage'].includes(messageType || '')) {
         mediaType = messageType!.replace('Message', '');
+        console.log(`[Webhook] Processando mídia do tipo: ${mediaType}`);
 
         try {
-          const fetchMediaUrl = `${channel.evolution_api_url.replace(/\/$/, '')}/chat/getBase64FromMediaMessage/${instanceName}`;
-          const response = await fetch(fetchMediaUrl, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'apikey': channel.evolution_api_key
-            },
-            body: JSON.stringify({ message: messageObj })
-          });
+          // CAPTURA DIRETA: Se a Evolution API já mandou a base64 direto no payload, usamos ela!
+          let base64Data = actualData?.base64;
 
-          if (response.ok) {
-            const mediaData = await response.json();
-            const base64Data = mediaData.base64 || mediaData.media;
+          // Fallback: Se por acaso alguma mídia não vier com base64, tenta buscar de forma externa
+          if (!base64Data) {
+            console.log(`[Webhook] Mídia base64 não encontrada no payload, buscando na API...`);
+            const fetchMediaUrl = `${channel.evolution_api_url.replace(/\/$/, '')}/chat/getBase64FromMediaMessage/${instanceName}`;
+            const response = await fetch(fetchMediaUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'apikey': channel.evolution_api_key
+              },
+              body: JSON.stringify({ message: messageObj })
+            });
 
-            if (base64Data) {
-              const buffer = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
-              const fileName = `${Date.now()}-${key.id}.${mediaType === 'audio' ? 'ogg' : mediaType === 'image' ? 'jpg' : 'bin'}`;
-              const filePath = `${channel.company_id}/${fileName}`;
-
-              const { data: uploadData, error: uploadError } = await supabase.storage
-                .from('chat_media')
-                .upload(filePath, buffer, {
-                  contentType: mediaType === 'audio' ? 'audio/ogg' : mediaType === 'image' ? 'image/jpeg' : 'application/octet-stream',
-                  upsert: true
-                });
-
-              if (!uploadError) {
-                const { data: { publicUrl } } = supabase.storage.from('chat_media').getPublicUrl(filePath);
-                mediaUrl = publicUrl;
-              }
+            if (response.ok) {
+              const mediaData = await response.json();
+              base64Data = mediaData.base64 || mediaData.media;
             }
           }
+
+          if (base64Data) {
+            const buffer = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
+
+            // Define a extensão correta para cada tipo de mídia salvando o layout
+            const fileExt = mediaType === 'audio' ? 'ogg' : mediaType === 'image' ? 'jpg' : mediaType === 'video' ? 'mp4' : 'bin';
+            const fileName = `${Date.now()}-${key.id}.${fileExt}`;
+            const filePath = `${channel.company_id}/${fileName}`;
+
+            const contentTypeMap: Record<string, string> = {
+              audio: 'audio/ogg',
+              image: 'image/jpeg',
+              video: 'video/mp4',
+              document: 'application/octet-stream'
+            };
+
+            const { data: uploadData, error: uploadError } = await supabase.storage
+              .from('chat_media')
+              .upload(filePath, buffer, {
+                contentType: contentTypeMap[mediaType] || 'application/octet-stream',
+                upsert: true
+              });
+
+            if (!uploadError) {
+              const { data: { publicUrl } } = supabase.storage.from('chat_media').getPublicUrl(filePath);
+              mediaUrl = publicUrl;
+              console.log(`[Webhook] Mídia salva com sucesso em: ${mediaUrl}`);
+            } else {
+              console.error("[Storage] Erro no upload do arquivo:", uploadError);
+            }
+          } else {
+            console.error("[Webhook] Não foi possível extrair a string base64 da mídia.");
+          }
         } catch (mediaErr) {
-          console.error("[Media] Erro ao baixar/salvar mídia:", mediaErr);
+          console.error("[Media] Erro ao processar/salvar mídia:", mediaErr);
         }
       }
 

@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import {
   CheckCircle2, Eye, Clock, Zap, Paperclip, Send,
   MoreVertical, MessageSquare, Search, Smartphone,
-  Instagram, Loader2, DownloadCloud, ArrowLeft
+  Instagram, Loader2, DownloadCloud, ArrowLeft, FileText
 } from "lucide-react"; // <-- ArrowLeft adicionado aqui!
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -538,25 +538,58 @@ const Atendimentos = () => {
                                 ? "bg-primary text-primary-foreground rounded-tr-none"
                                 : "bg-card border border-border text-foreground rounded-tl-none"}`}>
 
+                              {/* 1. IMAGENS (Com limite de tamanho e fundo bonitinho) */}
                               {msg.type === 'image' && msg.media_url && (
-                                <div className="mb-2 rounded overflow-hidden cursor-pointer hover:opacity-90 transition-opacity" onClick={() => window.open(msg.media_url!, '_blank')}>
-                                  <img src={msg.media_url} alt="Imagem" className="max-w-full h-auto rounded" />
+                                <div className="mb-2 rounded-lg overflow-hidden cursor-pointer hover:opacity-90 transition-opacity bg-black/5 flex justify-center" onClick={() => window.open(msg.media_url!, '_blank')}>
+                                  <img src={msg.media_url} alt="Imagem enviada" className="max-w-[250px] sm:max-w-xs max-h-[300px] object-contain rounded-lg" />
                                 </div>
                               )}
 
+                              {/* 2. ÁUDIOS (Player padronizado) */}
                               {msg.type === 'audio' && msg.media_url && (
-                                <div className="mb-2 min-w-[200px]">
-                                  <audio src={msg.media_url} controls className="h-8 w-full" />
+                                <div className="mb-2 min-w-[220px] sm:min-w-[280px]">
+                                  <audio src={msg.media_url} controls className="h-10 w-full" />
                                 </div>
                               )}
 
+                              {/* 3. VÍDEOS (Limitados para não explodir a tela) */}
                               {msg.type === 'video' && msg.media_url && (
-                                <div className="mb-2 rounded overflow-hidden">
-                                  <video src={msg.media_url} controls className="max-w-full h-auto rounded" />
+                                <div className="mb-2 rounded-lg overflow-hidden bg-black/10 flex justify-center max-w-[250px] sm:max-w-xs">
+                                  <video src={msg.media_url} controls className="max-w-full max-h-[300px] rounded-lg" />
                                 </div>
                               )}
 
-                              <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                              {/* 4. DOCUMENTOS (O que faltava! PDF, DOCX, planilhas) */}
+                              {msg.type === 'document' && msg.media_url && (
+                                <a
+                                  href={msg.media_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={`flex items-center gap-3 p-3 border rounded-lg mb-2 transition-colors no-underline
+                                    ${isAgent
+                                      ? "bg-primary-foreground/10 border-primary-foreground/20 hover:bg-primary-foreground/20 text-primary-foreground"
+                                      : "bg-background/50 border-border hover:bg-background text-foreground"}`}
+                                >
+                                  <div className={`h-10 w-10 rounded flex items-center justify-center shrink-0 
+                                    ${isAgent ? "bg-primary-foreground/20" : "bg-primary/10"}`}>
+                                    <FileText className={`h-5 w-5 ${isAgent ? "text-primary-foreground" : "text-primary"}`} />
+                                  </div>
+                                  <div className="flex flex-col overflow-hidden min-w-[120px]">
+                                    <span className="text-sm font-semibold truncate">
+                                      Documento Anexado
+                                    </span>
+                                    <span className={`text-[10px] truncate ${isAgent ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
+                                      Clique para abrir/baixar
+                                    </span>
+                                  </div>
+                                  <DownloadCloud className="h-4 w-4 shrink-0 opacity-70 ml-2" />
+                                </a>
+                              )}
+
+                              {/* Renderiza o texto (se existir) ignorando o [Arquivo de...] automático do Webhook */}
+                              {msg.content && !msg.content.startsWith('[Arquivo de') && (
+                                <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                              )}
                               <div className={`text-[10px] mt-1 flex items-center justify-end gap-1 ${isAgent ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
                                 {format(new Date(msg.created_at), 'HH:mm')}
                                 {isAgent && (
