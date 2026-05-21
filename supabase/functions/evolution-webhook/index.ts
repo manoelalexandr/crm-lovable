@@ -49,15 +49,27 @@ Deno.serve(async (req: Request) => {
       const participant = key?.participant; // ID de quem falou no grupo
       // ------------------------------
 
-      const messageType = actualData?.messageType || Object.keys(messageObj || {}).find(k =>
-        ['conversation', 'extendedTextMessage', 'imageMessage', 'audioMessage', 'videoMessage', 'documentMessage'].includes(k)
+
+      // 1. DESEMPACOTAR MENSAGENS (Incluindo Visualização Única)
+      let currentMessageType = actualData?.messageType || Object.keys(messageObj || {}).find(k =>
+        ['conversation', 'extendedTextMessage', 'imageMessage', 'audioMessage', 'videoMessage', 'documentMessage', 'viewOnceMessage', 'viewOnceMessageV2'].includes(k)
       );
 
-      let messageContent = messageObj?.conversation || messageObj?.extendedTextMessage?.text || "";
+      let currentMessageObj = messageObj;
+
+      // Se for visualização única, nós "abrimos o envelope" para pegar a foto/vídeo real lá dentro
+      if (currentMessageType === 'viewOnceMessage' || currentMessageType === 'viewOnceMessageV2') {
+        currentMessageObj = messageObj?.[currentMessageType]?.message || messageObj;
+        currentMessageType = Object.keys(currentMessageObj || {}).find(k =>
+          ['imageMessage', 'videoMessage', 'audioMessage'].includes(k)
+        ) || currentMessageType;
+      }
+
+      let messageContent = currentMessageObj?.conversation || currentMessageObj?.extendedTextMessage?.text || "";
       let mediaUrl = null;
       let mediaType = "text";
 
-      if (!messageContent && !messageType) {
+      if (!messageContent && !currentMessageType) {
         return new Response("Empty content", { status: 200 });
       }
 
@@ -71,26 +83,21 @@ Deno.serve(async (req: Request) => {
         return new Response("Channel not found", { status: 404 });
       }
 
-      // Processar Mídia se necessário (Otimizado para ler a base64 direta do payload)
-      if (['imageMessage', 'audioMessage', 'videoMessage', 'documentMessage'].includes(messageType || '')) {
-        mediaType = messageType!.replace('Message', '');
+      // 2. PROCESSAMENTO DE MÍDIA INTELIGENTE (Fim do .bin)
+      if (['imageMessage', 'audioMessage', 'videoMessage', 'documentMessage'].includes(currentMessageType || '')) {
+        mediaType = currentMessageType!.replace('Message', '');
         console.log(`[Webhook] Processando mídia do tipo: ${mediaType}`);
 
         try {
-          // CAPTURA DIRETA: Se a Evolution API já mandou a base64 direto no payload, usamos ela!
-          let base64Data = actualData?.base64;
+          let base64Data = actualData?.base64 || currentMessageObj?.base64 || currentMessageObj?.[currentMessageType]?.base64;
 
-          // Fallback: Se por acaso alguma mídia não vier com base64, tenta buscar de forma externa
           if (!base64Data) {
-            console.log(`[Webhook] Mídia base64 não encontrada no payload, buscando na API...`);
+            console.log(`[Webhook] Buscando mídia na API...`);
             const fetchMediaUrl = `${channel.evolution_api_url.replace(/\/$/, '')}/chat/getBase64FromMediaMessage/${instanceName}`;
             const response = await fetch(fetchMediaUrl, {
               method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'apikey': channel.evolution_api_key
-              },
-              body: JSON.stringify({ message: messageObj })
+              headers: { 'Content-Type': 'application/json', 'apikey': channel.evolution_api_key },
+              body: JSON.stringify({ message: actualData })
             });
 
             if (response.ok) {
@@ -102,34 +109,43 @@ Deno.serve(async (req: Request) => {
           if (base64Data) {
             const buffer = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
 
-            // Define a extensão correta para cada tipo de mídia salvando o layout
-            const fileExt = mediaType === 'audio' ? 'ogg' : mediaType === 'image' ? 'jpg' : mediaType === 'video' ? 'mp4' : 'bin';
-            const fileName = `${Date.now()}-${key.id}.${fileExt}`;
+            // Detecção exata de extensão e mimetype
+            let fileExt = 'bin';
+            let mimeType = 'application/octet-stream';
+            let originalFileName = '';
+
+            if (mediaType === 'audio') { fileExt = 'ogg'; mimeType = 'audio/ogg'; }
+            else if (mediaType === 'image') { fileExt = 'jpg'; mimeType = 'image/jpeg'; }
+            else if (mediaType === 'video') { fileExt = 'mp4'; mimeType = 'video/mp4'; }
+            else if (mediaType === 'document') {
+              const docMeta = currentMessageObj?.documentMessage;
+              originalFileName = docMeta?.fileName || '';
+
+              if (originalFileName && originalFileName.includes('.')) {
+                fileExt = originalFileName.split('.').pop() || 'pdf';
+              } else if (docMeta?.mimetype) {
+                fileExt = docMeta.mimetype.split('/')[1]?.split(';')[0] || 'pdf';
+              } else {
+                fileExt = 'pdf'; // Melhor fallback que .bin
+              }
+              mimeType = docMeta?.mimetype || 'application/pdf';
+            }
+
+            // Preserva o nome bonito do arquivo se for documento
+            const fileName = (mediaType === 'document' && originalFileName)
+              ? `${Date.now()}-${originalFileName.replace(/[^a-zA-Z0-9.-]/g, '_')}`
+              : `${Date.now()}-${key.id}.${fileExt}`;
+
             const filePath = `${channel.company_id}/${fileName}`;
 
-            const contentTypeMap: Record<string, string> = {
-              audio: 'audio/ogg',
-              image: 'image/jpeg',
-              video: 'video/mp4',
-              document: 'application/octet-stream'
-            };
-
-            const { data: uploadData, error: uploadError } = await supabase.storage
+            const { error: uploadError } = await supabase.storage
               .from('chat_media')
-              .upload(filePath, buffer, {
-                contentType: contentTypeMap[mediaType] || 'application/octet-stream',
-                upsert: true
-              });
+              .upload(filePath, buffer, { contentType: mimeType, upsert: true });
 
             if (!uploadError) {
               const { data: { publicUrl } } = supabase.storage.from('chat_media').getPublicUrl(filePath);
               mediaUrl = publicUrl;
-              console.log(`[Webhook] Mídia salva com sucesso em: ${mediaUrl}`);
-            } else {
-              console.error("[Storage] Erro no upload do arquivo:", uploadError);
             }
-          } else {
-            console.error("[Webhook] Não foi possível extrair a string base64 da mídia.");
           }
         } catch (mediaErr) {
           console.error("[Media] Erro ao processar/salvar mídia:", mediaErr);
